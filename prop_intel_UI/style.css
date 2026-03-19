@@ -1,0 +1,309 @@
+/* --- System Variables --- */
+:root {
+    --primary: #0284c7; 
+    --primary-hover: #0369a1;
+    --sidebar-bg: #0f172a; 
+    --bg-light: #f8fafc;
+    --card-bg: #ffffff;
+    --text-main: #1e293b;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --success: #10b981;
+    --danger: #ef4444;
+}
+
+/* --- Global Resets --- */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+    display: flex;
+    height: 100vh;
+    background-color: var(--bg-light);
+    color: var(--text-main);
+    overflow: hidden; 
+}
+
+/* --- Sidebar (Identical Across All Pages) --- */
+.sidebar {
+    width: 260px;
+    background-color: var(--sidebar-bg);
+    color: white;
+    display: flex;
+    flex-direction: column;
+}
+
+.brand-logo {
+    font-size: 1.5rem;
+    font-weight: 700;
+    padding: 1.5rem;
+    color: var(--primary);
+    border-bottom: 1px solid #1e293b;
+}
+
+.side-nav {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem 0;
+}
+
+.side-nav a {
+    color: #cbd5e1;
+    text-decoration: none;
+    padding: 1rem 1.5rem;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+
+.side-nav a:hover, .side-nav a.active {
+    background-color: #1e293b;
+    color: white;
+    border-left: 4px solid var(--primary);
+}
+
+/* --- Main Workspace (The Scrolling Content Area) --- */
+.workspace {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto; 
+}
+
+.top-controls {
+    background-color: var(--card-bg);
+    padding: 1.5rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    position: sticky; 
+    top: 0;
+    z-index: 10;
+}
+
+.page-title { font-size: 1.5rem; font-weight: 600; }
+.subtitle { color: var(--text-muted); font-size: 0.875rem; margin-top: 0.25rem; }
+
+/* --- Forms & Buttons --- */
+.filter-section { display: flex; gap: 1rem; }
+
+.data-filter, .input-form {
+    padding: 0.6rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background-color: var(--bg-light);
+    color: var(--text-main);
+    font-size: 0.875rem;
+    outline: none;
+    width: 100%;
+}
+
+.data-filter:focus, .input-form:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.1);
+}
+
+.btn-primary {
+    background-color: var(--primary);
+    color: white;
+    border: none;
+    padding: 0.6rem 1.25rem;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.btn-primary:hover { background-color: var(--primary-hover); }
+
+/* --- Layout Grids & Cards --- */
+.content-grid {
+    padding: 2rem;
+    display: grid;
+    gap: 1.5rem;
+}
+
+.kpi-grid { grid-template-columns: repeat(3, 1fr); }
+.split-grid { grid-template-columns: 1fr 1fr; align-items: start; }
+
+.card {
+    background-color: var(--card-bg);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+}
+
+.card-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+    color: var(--text-main);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.75rem;
+}
+
+/* Specific styling for big numbers (Market Overview) */
+.big-value {
+    font-size: 3rem;
+    font-weight: 800;
+    color: var(--primary);
+    margin: 1rem 0;
+    text-align: left;
+}
+
+/* --- Map Placeholder (For Heatmaps) --- */
+.mock-map {
+    width: 100%;
+    height: 600px;
+    background-color: var(--bg-light);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-top: 1rem;
+}
+
+/* --- Specific ROI UI Elements --- */
+.form-group { margin-bottom: 1.25rem; }
+.form-group label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--text-muted);
+}
+
+.prediction-box {
+    background: linear-gradient(to right, #f0f9ff, #e0f2fe);
+    border: 1px solid #bae6fd;
+    border-radius: 8px;
+    padding: 2rem;
+    text-align: center;
+}
+
+.prediction-label {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--primary-hover);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.prediction-value {
+    font-size: 4rem;
+    font-weight: 800;
+    color: var(--primary);
+    margin: 0.5rem 0;
+}
+
+.metric-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--border);
+}
+.metric-row:last-child { border-bottom: none; }
+.metric-label { font-weight: 500; color: var(--text-muted); }
+.metric-data { font-weight: 700; color: var(--text-main); }
+
+/* --- List Styling (For Alerts) --- */
+.alerts-list {
+    list-style: none;
+}
+
+.alert-item {
+    background-color: var(--card-bg);
+    padding: 1rem 1.5rem;
+    border: 1px solid var(--border);
+    margin-bottom: 0.75rem;
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.alert-details strong { font-size: 1rem; display: block; }
+.alert-details span { font-size: 0.875rem; color: var(--text-muted); }
+
+.status-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+}
+.status-active { background-color: #d1fae5; color: #065f46; }
+.status-paused { background-color: #f1f5f9; color: #475569; }
+
+.action-btns {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-action {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 0.2rem 0.5rem;
+}
+.btn-delete { color: var(--danger); }
+
+/* --- Data Tables --- */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+.data-table th {
+    background-color: var(--bg-light);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    font-weight: 600;
+    padding: 1rem 1.5rem;
+    border-bottom: 2px solid var(--border);
+}
+
+.data-table td {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-main);
+    font-size: 0.95rem;
+}
+
+.data-table tbody tr:last-child td {
+    border-bottom: none; /* Removes the bottom border from the very last row */
+}
+
+.data-table tbody tr:hover {
+    background-color: var(--bg-light); /* Highlights the row when mouse hovers over it */
+}
+
+/* Icon Button for the Trash Can */
+.btn-icon {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.btn-icon:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+
+

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PropIntel | ROI Calculator</title>
+    <link rel="stylesheet" href="style.css"> 
+</head>
+<body>
+
+    <aside class="sidebar">
+        <div class="brand-logo">PropIntel</div>
+        <nav class="side-nav">
+            <a href="index.html">Market Overview</a>
+            <a href="heatmaps.html">Price Heatmaps</a>
+            <a href="calculator.html" class="active">ROI Calculator</a>
+            <a href="alerts.html">My Saved Alerts</a>
+        </nav>
+    </aside>
+
+    <main class="workspace">
+        
+        <header class="top-controls">
+            <div>
+                <h1 class="page-title">ROI Calculator</h1>
+                <p class="subtitle">Calculate investment returns with dynamic feedback</p>
+            </div>
+            <button class="btn-primary" style="background-color: var(--text-muted);">Reset Values</button>
+        </header>
+
+        <section class="content-grid split-grid">
+            
+            <div class="card">
+                <h2 class="card-title">Property Details & Cost Input</h2>
+                
+                <div class="form-group">
+                    <label>Property Price (Rs)</label>
+                    <input type="text" class="input-form" placeholder="e.g. 45000000">
+                </div>
+                
+                <div class="form-group">
+                    <label>Down Payment (%)</label>
+                    <input type="text" class="input-form" placeholder="e.g. 20">
+                </div>
+
+                <div class="form-group">
+                    <label>Interest Rate (%)</label>
+                    <input type="text" class="input-form" placeholder="e.g. 12.5">
+                </div>
+
+                <div class="form-group">
+                    <label>Monthly Rental Income (Rs)</label>
+                    <input type="text" class="input-form" placeholder="e.g. 180000">
+                </div>
+
+                <div class="form-group">
+                    <label>Estimated Monthly Expenses (Rs)</label>
+                    <input type="text" class="input-form" placeholder="e.g. 15000">
+                </div>
+
+                <div style="background-color: #f1f5f9; padding: 1rem; border-radius: 6px; border: 1px solid var(--border); margin: 1.5rem 0; display: flex; justify-content: space-between;">
+                    <span style="color: var(--text-muted); font-size: 0.875rem; font-weight: 600;">Net Operating Income:</span> 
+                    <strong style="color: var(--text-main);">Rs 0</strong>
+                </div>
+
+                <button class="btn-primary" style="width: 100%; padding: 0.8rem; font-size: 1rem;">Calculate ROI</button>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">Investment Summary</h2>
+                
+                <div class="prediction-box" style="margin-bottom: 2rem; background: #ffffff; border: 2px solid var(--text-main);">
+                    <div class="prediction-label" style="color: var(--text-muted);">Calculated ROI %</div>
+                    
+                    <div class="prediction-value" style="font-size: 4.5rem; color: var(--text-main);">8.5%</div>
+                    
+                    <p style="color: var(--text-muted); font-size: 0.75rem; margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.5rem;">
+                        ↑ Dynamic feedback loop for user engagement
+                    </p>
+                </div>
+
+                <div class="metric-row">
+                    <span class="metric-label">Cash-on-Cash Return</span>
+                    <span class="metric-data">0.0%</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Cap Rate</span>
+                    <span class="metric-data">0.0%</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Total Annual Income</span>
+                    <span class="metric-data">Rs 0</span>
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+</body>
+</html>
