@@ -1,0 +1,10 @@
+# Environment secrets
+.env
+# Python cache
+__pycache__/
+*.pyc
+# Data lake (too large for git)
+data/
+# IDE
+.vscode/
+.idea/
