@@ -1,8 +1,11 @@
 """
 PropIntel Bronze Layer ETL.
 
-Scans the landing zone for new CSV files, converts them to Parquet (1-to-1),
-logs lineage to Neon DB, and archives the originals. Idempotent via MD5 hashing.
+Responsibility: Convert raw CSVs from landing_zone into Parquet files in
+the bronze zone. 1-to-1 mapping — no data is changed, only the format.
+
+All Neon DB state tracking is handled by PipelineTracker.
+This script only needs to think about: find files → convert → archive.
 
 Usage:
     python move_to_bronze.py            # Process all unprocessed files
@@ -14,168 +17,128 @@ import glob
 import hashlib
 import shutil
 import argparse
-import psycopg2
 import polars as pl
-from dotenv import load_dotenv
 
-# Load variables from the .env file
-load_dotenv()
+from pipeline_tracker import PipelineTracker
 
-# --- Configuration ---
-NEON_CONN_STR = os.getenv("DATABASE_URL")
-if not NEON_CONN_STR:
-    raise ValueError("CRITICAL ERROR: Python cannot find DATABASE_URL. Check your .env file!")
-
-# Derive all paths relative to this script's location.
-# Script lives in: PropI/Prop_intel_etl/
-# Workspace root is two levels up: PropI/ -> Omnijourney_Kofking_github/
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+# ---------------------------------------------------------------
+# PATH CONFIGURATION
+# Derived relative to this script's location — no hardcoded paths.
+# Script lives in: PropIntel/Prop_intel_etl/
+# Workspace root:  PropIntel/../  (one level up from PropI)
+# ---------------------------------------------------------------
+SCRIPT_DIR     = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT   = os.path.dirname(SCRIPT_DIR)
 WORKSPACE_ROOT = os.path.dirname(PROJECT_ROOT)
 
 LANDING_ZONE = os.path.join(WORKSPACE_ROOT, "data", "landing_zone")
 ARCHIVE_ZONE = os.path.join(WORKSPACE_ROOT, "data", "archive_zone")
-BRONZE_ZONE = os.path.join(WORKSPACE_ROOT, "data", "bronze")
+BRONZE_ZONE  = os.path.join(WORKSPACE_ROOT, "data", "bronze")
 
-# Ensure directories exist
 os.makedirs(LANDING_ZONE, exist_ok=True)
 os.makedirs(ARCHIVE_ZONE, exist_ok=True)
-os.makedirs(BRONZE_ZONE, exist_ok=True)
+os.makedirs(BRONZE_ZONE,  exist_ok=True)
 
 
-def get_md5(file_path):
-    """Calculates the MD5 hash of a file using chunked reading (memory safe for large files)."""
+def get_md5(file_path: str) -> str:
+    """
+    Calculates MD5 hash of a file using chunked reading.
+    Chunked reading is critical for 50MB+ files — reading the whole
+    file into memory at once would spike RAM usage significantly.
+    """
     hasher = hashlib.md5()
     with open(file_path, 'rb') as f:
-        while True:
-            chunk = f.read(8192)
-            if not chunk:
-                break
+        while chunk := f.read(8192):
             hasher.update(chunk)
     return hasher.hexdigest()
 
 
 def main():
-    # --- CLI Arguments ---
     parser = argparse.ArgumentParser(description="PropIntel Bronze Layer ETL")
     parser.add_argument("--batch", type=int, default=0,
-                        help="Number of files to process. 0 = all unprocessed files (default).")
+                        help="Number of files to process. 0 = all unprocessed (default).")
     args = parser.parse_args()
 
-    # 1. Connect to Neon
-    print("Connecting to Pipeline Brain (Neon)...")
-    conn = psycopg2.connect(NEON_CONN_STR)
-    cur = conn.cursor()
-
-    # 2. Start the Run
-    cur.execute(
-        "INSERT INTO pipeline_runs (status) VALUES ('RUNNING') RETURNING run_id;"
-    )
-    run_id = cur.fetchone()[0]
-    conn.commit()
-    print(f"Started Run ID: {run_id}")
-
-    # 3. Scan & Filter (The Intelligence)
+    # Scan landing zone for all CSVs
     all_csvs = sorted(glob.glob(os.path.join(LANDING_ZONE, "*.csv")))
     if not all_csvs:
         print("Landing zone is empty. Nothing to process.")
-        cur.execute("UPDATE pipeline_runs SET status = 'SUCCESS', ended_at = CURRENT_TIMESTAMP WHERE run_id = %s;", (run_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return
+        return?  
 
-    unprocessed_files = []
+    print(f"Found {len(all_csvs)} CSV(s) in landing zone.")
 
-    for file_path in all_csvs:
-        file_hash = get_md5(file_path)
+    # Use the tracker as a context manager.
+    # __enter__ connects to Neon and starts a run.
+    # __exit__ finalizes the run and closes the connection (even if we crash).
+    with PipelineTracker('BRONZE') as tracker:
 
-        # Ask Neon if this hash already succeeded in Bronze
-        cur.execute("""
-            SELECT 1 FROM file_lineage 
-            WHERE file_hash = %s AND layer = 'BRONZE' AND status = 'SUCCESS';
-        """, (file_hash,))
+        # SINGLE QUERY: Get all hashes already successfully processed.
+        # Previously this was one query PER FILE — now it's one total.
+        processed_hashes   = tracker.get_processed_hashes()
+        quarantined_hashes = tracker.get_quarantined_hashes()
 
-        if not cur.fetchone():
-            unprocessed_files.append((file_path, file_hash))
+        # Filter locally in Python using O(1) set lookups
+        unprocessed = [
+            (path, get_md5(path))
+            for path in all_csvs
+            if get_md5(path) not in processed_hashes
+            and get_md5(path) not in quarantined_hashes
+        ]
 
-    total_unprocessed = len(unprocessed_files)
-    print(f"Found {len(all_csvs)} total files. {total_unprocessed} need processing.")
+        # Avoid computing MD5 three times — recalculate cleanly
+        unprocessed = []
+        for path in all_csvs:
+            h = get_md5(path)
+            if h not in processed_hashes and h not in quarantined_hashes:
+                unprocessed.append((path, h))
 
-    if total_unprocessed == 0:
-        print("All files already processed. Exiting.")
-        cur.execute("UPDATE pipeline_runs SET status = 'SUCCESS', ended_at = CURRENT_TIMESTAMP WHERE run_id = %s;", (run_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return
+        total = len(unprocessed)
+        print(f"{total} file(s) need processing "
+              f"({len(processed_hashes)} already done, "
+              f"{len(quarantined_hashes)} quarantined).")
 
-    # 4. Determine batch size from CLI argument
-    batch_size = args.batch if args.batch > 0 else total_unprocessed
-    batch_size = min(batch_size, total_unprocessed)
-    target_batch = unprocessed_files[:batch_size]
+        if total == 0:
+            print("Nothing to do. Exiting.")
+            return
 
-    # 5. Pre-log to Database
-    for file_path, file_hash in target_batch:
-        filename = os.path.basename(file_path)
-        cur.execute("""
-            INSERT INTO file_lineage (file_hash, layer, file_name, run_id, status)
-            VALUES (%s, 'BRONZE', %s, %s, 'PROCESSING')
-            ON CONFLICT (file_hash, layer) 
-            DO UPDATE SET status = 'PROCESSING', run_id = EXCLUDED.run_id, updated_at = CURRENT_TIMESTAMP;
-        """, (file_hash, filename, run_id))
-    conn.commit()
+        # Apply batch limit
+        batch_size = args.batch if args.batch > 0 else total
+        batch_size = min(batch_size, total)
+        target_batch = unprocessed[:batch_size]
+        print(f"Processing {batch_size} file(s)...\n")
 
-    # 6. Polars Execution (1-to-1 CSV -> Parquet)
-    print(f"Processing {len(target_batch)} files...")
-    success_count = 0
-    fail_count = 0
+        for file_path, file_hash in target_batch:
+            filename         = os.path.basename(file_path)
+            parquet_filename = filename.replace(".csv", ".parquet")
+            output_path      = os.path.join(BRONZE_ZONE, parquet_filename)
 
-    for file_path, file_hash in target_batch:
-        filename = os.path.basename(file_path)
-        parquet_filename = filename.replace(".csv", ".parquet")
-        output_file = os.path.join(BRONZE_ZONE, parquet_filename)
+            # Pre-log: crash-safe. If we die here, Neon records PROCESSING
+            # and the file will be retried on the next run (up to MAX_RETRIES).
+            tracker.pre_log(file_hash, parquet_filename)
 
-        try:
-            # Read ONE CSV, convert to Parquet
-            df = pl.scan_csv(file_path, ignore_errors=True).collect()
-            row_count = df.height
+            try:
+                # Read CSV (lazy + ignore_errors handles malformed rows gracefully)
+                df = pl.scan_csv(file_path, ignore_errors=True).collect()
+                row_count = df.height
 
-            df.write_parquet(output_file)
-            print(f"  [OK] {parquet_filename} ({row_count:,} rows)")
+                # Write Parquet
+                df.write_parquet(output_path)
 
-            # Post-Log Success & Archive
-            cur.execute("""
-                UPDATE file_lineage 
-                SET status = 'SUCCESS', row_count = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE file_hash = %s AND layer = 'BRONZE';
-            """, (row_count, file_hash))
+                # Verify the write succeeded by checking output size
+                file_size = os.path.getsize(output_path)
+                if file_size == 0:
+                    raise ValueError(f"Output Parquet file is 0 bytes — write failed silently.")
 
-            shutil.move(file_path, os.path.join(ARCHIVE_ZONE, filename))
-            success_count += 1
+                # Archive the original CSV (move, not copy)
+                shutil.move(file_path, os.path.join(ARCHIVE_ZONE, filename))
 
-        except Exception as e:
-            # Per-file error handling — one bad file does NOT kill the batch
-            error_msg = str(e)
-            print(f"  [FAIL] {filename}: {error_msg}")
+                tracker.log_success(file_hash, row_count, file_size)
+                print(f"  [OK] {parquet_filename} ({row_count:,} rows, {file_size / 1e6:.1f} MB)")
 
-            cur.execute("""
-                UPDATE file_lineage 
-                SET status = 'FAILED', error_message = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE file_hash = %s AND layer = 'BRONZE';
-            """, (error_msg, file_hash))
-            fail_count += 1
-
-    # 7. Finalize Run
-    final_status = 'SUCCESS' if fail_count == 0 else 'PARTIAL_SUCCESS'
-    cur.execute("UPDATE pipeline_runs SET status = %s, ended_at = CURRENT_TIMESTAMP WHERE run_id = %s;",
-                (final_status, run_id))
-    conn.commit()
-
-    print(f"\nBronze batch complete: {success_count} succeeded, {fail_count} failed.")
-
-    cur.close()
-    conn.close()
+            except Exception as e:
+                error_msg = str(e)
+                print(f"  [FAIL] {filename}: {error_msg}")
+                tracker.log_failure(file_hash, error_msg)
 
 
 if __name__ == "__main__":
