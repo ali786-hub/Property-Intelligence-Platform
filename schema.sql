@@ -1,122 +1,139 @@
 -- ============================================================
--- PropIntel Pipeline State Tracker — Neon DB Schema
+-- PropIntel Pipeline — Database Schema (v2.0)
 -- ============================================================
--- Database: Prop_intel_tracker (hosted on Neon serverless Postgres)
+-- Target: Azure Database for PostgreSQL (currently Neon serverless)
 --
--- Purpose: Track every file through every layer of the Medallion
--- Architecture. Provides full audit trail: which files were processed,
--- when, by which run, how many rows, and what errors occurred.
+-- PURPOSE:
+-- This schema serves a dual role in the PropIntel architecture:
+--   1. FILE LINEAGE TRACKING — Audit trail of every file processed
+--      through the Medallion Architecture (Landing → Bronze → Silver → Gold).
+--   2. APACHE ICEBERG JDBC CATALOG — Neon/Azure Postgres acts as the
+--      Iceberg "phonebook", storing pointers to the physical data files
+--      in cloud storage (Azure Blob / S3). Iceberg manages its own
+--      catalog tables automatically; we only define our custom lineage.
 --
--- To set up from scratch: Copy-paste this entire file into the
--- Neon SQL Editor (https://console.neon.tech) and run it.
+-- SETUP:
+-- Copy-paste this entire file into the Azure Portal SQL Editor
+-- (or the Neon SQL Console) and execute it.
 --
--- NOTE ON LINEAGE KEY DESIGN:
--- The file_hash (MD5 of original CSV) is used as the lineage key
--- across ALL layers. This means a Silver row with layer='SILVER'
--- still stores the hash of the original CSV that produced it.
--- This is intentional — it allows tracing any processed artifact
--- back to its original source file.
+-- DESIGN DECISIONS:
+--   - The `pipeline_runs` table from v1 has been REMOVED.
+--     Apache Airflow now owns run orchestration, status tracking,
+--     and retry logic. Storing duplicate run metadata in Postgres
+--     would bloat the database and conflict with Airflow's own state.
+--     We store only the Airflow run_id as a foreign reference.
+--
+--   - The `PROCESSING` file status from v1 has been REMOVED.
+--     In v1, each file was pre-logged as PROCESSING before work began
+--     (a crash-safety mechanism). This caused an N+1 network latency
+--     bottleneck (one DB round-trip per file). In v2, we use a
+--     RAM-buffered bulk-flush strategy: files are processed in memory,
+--     and their results are committed to the database in a single
+--     atomic bulk upsert at the end of the batch. If the script crashes
+--     mid-run, the PostgreSQL transaction rolls back automatically,
+--     and Airflow retries the entire batch cleanly.
+--
+--   - The file_hash (MD5 of the original raw CSV) remains the lineage
+--     key across ALL layers. A Silver record with layer='SILVER' still
+--     stores the hash of the original CSV that produced it, enabling
+--     full source-to-output traceability.
 -- ============================================================
 
 
+-- ============================================================
 -- 1. ENUM TYPES
+-- ============================================================
 
--- pipeline_layer: Valid layers in the Medallion Architecture
--- GOLD is available but the Gold layer (Apache Iceberg) is built in Phase 2.
+-- pipeline_layer: Valid layers in the Medallion Architecture.
 CREATE TYPE pipeline_layer AS ENUM ('BRONZE', 'SILVER', 'GOLD');
 
--- run_status: All valid states a pipeline run can be in.
--- RUNNING:          A pipeline_run is actively executing.
--- SUCCESS:          The run completed and all files in the batch succeeded.
--- PARTIAL_SUCCESS:  The run completed, but at least one file in the batch failed.
--- FAILED:           The run failed (e.g., due to an unhandled script crash).
-CREATE TYPE run_status AS ENUM (
-    'RUNNING',
-    'SUCCESS',
-    'PARTIAL_SUCCESS',
-    'FAILED'
-);
-
--- file_status: All valid states an individual file can be in during a run.
--- PENDING:          Reserved for future use.
--- PROCESSING:       Pre-logged to file_lineage before ETL work begins (crash-safe).
---                   If the script crashes mid-file, this record stays PROCESSING,
---                   and the next run picks it up and retries it.
--- SUCCESS:          File processed cleanly with row count confirmed.
--- FAILED:           File failed processing. retry_count incremented. Will be
---                   retried on next run until retry_count reaches MAX_RETRIES.
--- QUARANTINED:      File has failed MAX_RETRIES times. Skipped automatically.
---                   Requires human inspection of the source file.
-CREATE TYPE file_status AS ENUM (
-    'PENDING',
-    'PROCESSING',
-    'SUCCESS',
-    'FAILED',
-    'QUARANTINED'
-);
+-- file_status: Valid terminal states for a processed file.
+--   SUCCESS:      File processed cleanly with row count confirmed.
+--   FAILED:       File failed processing. Will be retried on next
+--                 Airflow run until retry_count hits the threshold.
+--   QUARANTINED:  File has exceeded the maximum retry limit.
+--                 Permanently skipped. Requires human inspection.
+CREATE TYPE file_status AS ENUM ('SUCCESS', 'FAILED', 'QUARANTINED');
 
 
--- 2. PIPELINE RUNS TABLE
--- One row per ETL script execution. Tracks the overall health of each run.
--- When move_to_bronze.py runs, it opens a run, does work, then closes it.
-
-CREATE TABLE pipeline_runs (
-    run_id          SERIAL PRIMARY KEY,
-    layer_name      pipeline_layer NOT NULL,        -- Which layer this run processed
-    status          run_status NOT NULL,            -- Overall status of this run
-    started_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ended_at        TIMESTAMP WITH TIME ZONE,
-
-    -- Summary counters (updated atomically when run finishes)
-    files_processed INTEGER NOT NULL DEFAULT 0,     -- Count of files that hit SUCCESS
-    files_failed    INTEGER NOT NULL DEFAULT 0      -- Count of files that hit FAILED
-);
-
--- Index for querying recent runs by layer
-CREATE INDEX idx_pipeline_runs_layer ON pipeline_runs (layer_name, started_at DESC);
-
-
--- 3. FILE LINEAGE TABLE
--- The core audit log. One row per file per layer.
+-- ============================================================
+-- 2. FILE LINEAGE TABLE (The Core Audit Log)
+-- ============================================================
+-- One row per file per layer. This is the single source of truth
+-- for "what data has been processed, where, and by whom."
 --
--- Key decisions:
--- - Primary key is (file_hash, layer): each unique source CSV gets exactly
---   one lineage entry per layer it passes through.
--- - file_hash is the MD5 of the ORIGINAL CSV, constant across all layers.
--- - retry_count tracks how many times a file has been attempted.
---   When retry_count >= MAX_RETRIES (defined in pipeline_tracker.py),
---   the file is set to QUARANTINED and ignored by future runs.
+-- PRIMARY KEY: (file_hash, layer)
+--   Each unique source CSV gets exactly one lineage entry per layer.
+--   The ON CONFLICT upsert clause in our Python bulk-flush ensures
+--   that Airflow retries never create duplicate records (idempotency).
 
 CREATE TABLE file_lineage (
-    -- Identity
-    file_hash           VARCHAR(64) NOT NULL,
-    layer               pipeline_layer NOT NULL,
+    -- Identity --
+    file_hash           VARCHAR(64)     NOT NULL,       -- MD5 hash of the original raw CSV
+    layer               pipeline_layer  NOT NULL,       -- Which Medallion layer this record represents
 
-    -- Source info
-    file_name           VARCHAR(255) NOT NULL,       -- Output filename in this layer
-    run_id              INTEGER NOT NULL REFERENCES pipeline_runs(run_id) ON DELETE CASCADE,
+    -- Source Info --
+    file_name           VARCHAR(255)    NOT NULL,       -- Output filename produced in this layer
+    airflow_run_id      VARCHAR(250),                   -- Airflow DAG run ID (e.g., 'scheduled__2026-07-16T00:00:00+00:00')
+                                                        -- Nullable to allow manual/standalone script execution during development
 
-    -- Status tracking
-    status              file_status NOT NULL,
-    retry_count         INTEGER NOT NULL DEFAULT 0,  -- Times this file has been attempted
+    -- Status Tracking --
+    status              file_status     NOT NULL,       -- Terminal state: SUCCESS, FAILED, or QUARANTINED
+    retry_count         INTEGER         NOT NULL DEFAULT 0,  -- Number of processing attempts. Incremented on each FAILED attempt.
 
-    -- Output metrics (populated after successful processing)
-    row_count           INTEGER,                     -- Rows in the output file
-    file_size_bytes     BIGINT,                      -- Size of output file in bytes
+    -- Output Metrics (populated on SUCCESS) --
+    row_count           INTEGER,                        -- Number of rows in the output file
+    file_size_bytes     BIGINT,                         -- Size of the output file in bytes
 
-    -- Error tracking
-    error_message       TEXT,                        -- Last error if status = FAILED
+    -- Error Tracking --
+    error_message       TEXT,                           -- Last error message if status = FAILED
 
-    -- Timestamps
+    -- Timestamps --
     created_at          TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
+    -- Constraints --
     CONSTRAINT file_lineage_pk PRIMARY KEY (file_hash, layer)
 );
 
--- Index for fast status lookups (used by pipeline_tracker.py batch eligibility checks)
-CREATE INDEX idx_file_lineage_status ON file_lineage (status);
 
--- Index for the most common query pattern: layer + status combo
--- e.g., "Give me all BRONZE SUCCESS files not yet in SILVER"
-CREATE INDEX idx_file_lineage_layer_status ON file_lineage (layer, status);
+-- ============================================================
+-- 3. INDEXES (Optimized for the Bulk-Flush Query Pattern)
+-- ============================================================
+
+-- Used at script STARTUP: "Give me all hashes that succeeded in BRONZE"
+-- This is the ONE query we run to populate the in-memory cache.
+CREATE INDEX idx_lineage_layer_status
+    ON file_lineage (layer, status);
+
+-- Used for monitoring dashboards and Airflow callbacks:
+-- "Show me everything from today's run"
+CREATE INDEX idx_lineage_airflow_run
+    ON file_lineage (airflow_run_id);
+
+-- Used for quarantine monitoring:
+-- "Which files have been retried too many times?"
+CREATE INDEX idx_lineage_retry_count
+    ON file_lineage (retry_count)
+    WHERE status = 'FAILED';
+
+
+-- ============================================================
+-- 4. HELPER FUNCTION: Auto-update `updated_at` on every upsert
+-- ============================================================
+-- This trigger automatically refreshes the `updated_at` timestamp
+-- whenever a row is inserted or updated via our bulk flush,
+-- so we never have to manage timestamps in Python code.
+
+CREATE OR REPLACE FUNCTION update_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_lineage_updated_at
+    BEFORE UPDATE ON file_lineage
+    FOR EACH ROW
+    EXECUTE FUNCTION update_timestamp();

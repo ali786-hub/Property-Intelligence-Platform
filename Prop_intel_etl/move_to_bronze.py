@@ -1,15 +1,8 @@
 """
 PropIntel Bronze Layer ETL.
 
-Responsibility: Convert raw CSVs from landing_zone into Parquet files in
-the bronze zone. 1-to-1 mapping — no data is changed, only the format.
-
-All Neon DB state tracking is handled by PipelineTracker.
-This script only needs to think about: find files → convert → archive.
-
-Usage:
-    python move_to_bronze.py            # Process all unprocessed files
-    python move_to_bronze.py --batch 3  # Process only 3 files
+Ingests raw CSV files from the landing zone, calculates their hashes to ensure 
+idempotency, and converts them to Parquet format in the bronze zone.
 """
 
 import os
@@ -21,30 +14,28 @@ import polars as pl
 
 from pipeline_tracker import PipelineTracker
 
-# ---------------------------------------------------------------
-# PATH CONFIGURATION
-# Derived relative to this script's location — no hardcoded paths.
-# Script lives in: PropIntel/Prop_intel_etl/
-# Workspace root:  PropIntel/../  (one level up from PropI)
-# ---------------------------------------------------------------
-SCRIPT_DIR     = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT   = os.path.dirname(SCRIPT_DIR)
+# --- Path Configuration ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 WORKSPACE_ROOT = os.path.dirname(PROJECT_ROOT)
 
 LANDING_ZONE = os.path.join(WORKSPACE_ROOT, "data", "landing_zone")
 ARCHIVE_ZONE = os.path.join(WORKSPACE_ROOT, "data", "archive_zone")
-BRONZE_ZONE  = os.path.join(WORKSPACE_ROOT, "data", "bronze")
+BRONZE_ZONE = os.path.join(WORKSPACE_ROOT, "data", "bronze")
 
 os.makedirs(LANDING_ZONE, exist_ok=True)
 os.makedirs(ARCHIVE_ZONE, exist_ok=True)
-os.makedirs(BRONZE_ZONE,  exist_ok=True)
+os.makedirs(BRONZE_ZONE, exist_ok=True)
 
 
-def get_md5(file_path: str) -> str:
+def calculate_file_hash(file_path: str) -> str:
     """
-    Calculates MD5 hash of a file using chunked reading.
-    Chunked reading is critical for 50MB+ files — reading the whole
-    file into memory at once would spike RAM usage significantly.
+    Computes the MD5 hash of a file using chunked streaming.
+    
+    Args:
+        file_path: Path to the target file.
+    Returns:
+        The MD5 hex string of the file contents.
     """
     hasher = hashlib.md5()
     with open(file_path, 'rb') as f:
@@ -54,90 +45,75 @@ def get_md5(file_path: str) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="PropIntel Bronze Layer ETL")
+    parser = argparse.ArgumentParser(description="PropIntel Bronze Layer Ingestion")
     parser.add_argument("--batch", type=int, default=0,
-                        help="Number of files to process. 0 = all unprocessed (default).")
+                        help="Maximum number of files to process. 0 = process all (default).")
     args = parser.parse_args()
 
-    # Scan landing zone for all CSVs
-    all_csvs = sorted(glob.glob(os.path.join(LANDING_ZONE, "*.csv")))
-    if not all_csvs:
-        print("Landing zone is empty. Nothing to process.")
-        return?  
+    # Discover and sort landing zone CSVs
+    raw_files = sorted(glob.glob(os.path.join(LANDING_ZONE, "*.csv")))
+    if not raw_files:
+        print("Landing zone is empty. No files to process.")
+        return
 
-    print(f"Found {len(all_csvs)} CSV(s) in landing zone.")
+    print(f"Found {len(raw_files)} raw CSV file(s) in landing zone.")
 
-    # Use the tracker as a context manager.
-    # __enter__ connects to Neon and starts a run.
-    # __exit__ finalizes the run and closes the connection (even if we crash).
     with PipelineTracker('BRONZE') as tracker:
-
-        # SINGLE QUERY: Get all hashes already successfully processed.
-        # Previously this was one query PER FILE — now it's one total.
-        processed_hashes   = tracker.get_processed_hashes()
+        processed_hashes = tracker.get_processed_hashes()
         quarantined_hashes = tracker.get_quarantined_hashes()
 
-        # Filter locally in Python using O(1) set lookups
-        unprocessed = [
-            (path, get_md5(path))
-            for path in all_csvs
-            if get_md5(path) not in processed_hashes
-            and get_md5(path) not in quarantined_hashes
-        ]
-
-        # Avoid computing MD5 three times — recalculate cleanly
+        # Identify files that haven't been successfully processed or quarantined
         unprocessed = []
-        for path in all_csvs:
-            h = get_md5(path)
-            if h not in processed_hashes and h not in quarantined_hashes:
-                unprocessed.append((path, h))
+        for file_path in raw_files:
+            file_hash = calculate_file_hash(file_path)
+            if file_hash not in processed_hashes and file_hash not in quarantined_hashes:
+                unprocessed.append((file_path, file_hash))
 
-        total = len(unprocessed)
-        print(f"{total} file(s) need processing "
-              f"({len(processed_hashes)} already done, "
-              f"{len(quarantined_hashes)} quarantined).")
+        total_files = len(unprocessed)
+        print(f"{total_files} file(s) require processing "
+              f"({len(processed_hashes)} processed, {len(quarantined_hashes)} quarantined).")
 
-        if total == 0:
-            print("Nothing to do. Exiting.")
+        if total_files == 0:
+            print("Nothing to process.")
             return
 
-        # Apply batch limit
-        batch_size = args.batch if args.batch > 0 else total
-        batch_size = min(batch_size, total)
-        target_batch = unprocessed[:batch_size]
-        print(f"Processing {batch_size} file(s)...\n")
+        # Determine target batch size
+        batch_limit = args.batch if args.batch > 0 else total_files
+        batch_size = min(batch_limit, total_files)
+        target_files = unprocessed[:batch_size]
+        print(f"Processing batch of {batch_size} file(s)...\n")
 
-        for file_path, file_hash in target_batch:
-            filename         = os.path.basename(file_path)
-            parquet_filename = filename.replace(".csv", ".parquet")
-            output_path      = os.path.join(BRONZE_ZONE, parquet_filename)
+        for file_path, file_hash in target_files:
+            base_name = os.path.basename(file_path)
+            parquet_name = base_name.replace(".csv", ".parquet")
+            output_path = os.path.join(BRONZE_ZONE, parquet_name)
 
-            # Pre-log: crash-safe. If we die here, Neon records PROCESSING
-            # and the file will be retried on the next run (up to MAX_RETRIES).
-            tracker.pre_log(file_hash, parquet_filename)
+            # Pre-log the file state to Neon database
+            tracker.pre_log(file_hash, parquet_name)
 
             try:
-                # Read CSV (lazy + ignore_errors handles malformed rows gracefully)
+                # Read CSV via Polars and collect into memory (ignoring malformed rows)
                 df = pl.scan_csv(file_path, ignore_errors=True).collect()
                 row_count = df.height
 
-                # Write Parquet
+                # Write to Parquet format
                 df.write_parquet(output_path)
 
-                # Verify the write succeeded by checking output size
+                # Validate output file integrity
                 file_size = os.path.getsize(output_path)
                 if file_size == 0:
-                    raise ValueError(f"Output Parquet file is 0 bytes — write failed silently.")
+                    raise ValueError("Output Parquet file is empty.")
 
-                # Archive the original CSV (move, not copy)
-                shutil.move(file_path, os.path.join(ARCHIVE_ZONE, filename))
+                # Move original CSV to archive zone on success
+                shutil.move(file_path, os.path.join(ARCHIVE_ZONE, base_name))
 
+                # Update lineage state to SUCCESS
                 tracker.log_success(file_hash, row_count, file_size)
-                print(f"  [OK] {parquet_filename} ({row_count:,} rows, {file_size / 1e6:.1f} MB)")
+                print(f"  [OK] {parquet_name} ({row_count:,} rows, {file_size / 1e6:.1f} MB)")
 
             except Exception as e:
                 error_msg = str(e)
-                print(f"  [FAIL] {filename}: {error_msg}")
+                print(f"  [FAIL] {base_name}: {error_msg}")
                 tracker.log_failure(file_hash, error_msg)
 
 
