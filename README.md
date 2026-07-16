@@ -55,7 +55,7 @@ A production-grade data engineering project that builds a complete **Medallion A
 
 File lineage is tracked via a **single PostgreSQL database** (currently Neon, migrating to Azure PostgreSQL):
 
-- **`file_lineage`** — Tracks individual files across every Medallion layer using the MD5 hash of the original CSV as the lineage key. Stores status, row counts, file sizes, error messages, and retry counts.
+- **`file_lineage`** — Tracks individual files across every Medallion layer using the SHA-256 hash of the original CSV as the lineage key. Stores status, row counts, file sizes, error messages, and retry counts.
 
 #### Performance Engineering
 

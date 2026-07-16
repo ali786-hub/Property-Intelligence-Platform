@@ -33,7 +33,7 @@
 --     mid-run, the PostgreSQL transaction rolls back automatically,
 --     and Airflow retries the entire batch cleanly.
 --
---   - The file_hash (MD5 of the original raw CSV) remains the lineage
+--   - The file_hash (SHA-256 of the original raw CSV) remains the lineage
 --     key across ALL layers. A Silver record with layer='SILVER' still
 --     stores the hash of the original CSV that produced it, enabling
 --     full source-to-output traceability.
@@ -69,7 +69,7 @@ CREATE TYPE file_status AS ENUM ('SUCCESS', 'FAILED', 'QUARANTINED');
 
 CREATE TABLE file_lineage (
     -- Identity --
-    file_hash           VARCHAR(64)     NOT NULL,       -- MD5 hash of the original raw CSV
+    file_hash           VARCHAR(64)     NOT NULL,       -- SHA-256 hash of the original raw CSV
     layer               pipeline_layer  NOT NULL,       -- Which Medallion layer this record represents
 
     -- Source Info --
