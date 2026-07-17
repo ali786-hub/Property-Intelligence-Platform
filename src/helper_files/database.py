@@ -18,7 +18,7 @@ if not DATABASE_URL:
 # Establish a connection pool to handle multiple tasks or scale connections efficiently
 # minconn=1, maxconn=10 is plenty for our local and orchestrator usage
 try:
-    connection_pool = psycopg2.pool.SimpleConnectionPool(
+    connection_pool = pool.SimpleConnectionPool(
         1, 10, dsn=DATABASE_URL
     )
     logging.info("PostgreSQL connection pool initialized successfully.")
