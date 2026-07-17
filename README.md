@@ -1,6 +1,6 @@
 # PropIntel — Property Intelligence ETL Platform
 
-A production-grade data engineering project that builds a complete **Medallion Architecture** (Landing → Bronze → Silver → Gold) for processing Pakistani real estate market data at scale. The pipeline is orchestrated by **Apache Airflow**, transforms data through progressively cleaner layers using **Polars** and **DuckDB**, and outputs analytical datasets as **Apache Iceberg** tables backed by a **JDBC Catalog** on PostgreSQL.
+A data engineering project that builds a complete **Medallion Architecture** (Landing → Bronze → Silver → Gold) for processing Pakistani real estate market data at scale. The pipeline is orchestrated by **Apache Airflow**, transforms data through progressively cleaner layers using **Polars** and **DuckDB**, and outputs analytical datasets as **Apache Iceberg** tables backed by a **JDBC Catalog** on PostgreSQL.
 
 > **📖 Engineering Decisions**: See [`problems_solved.md`](problems_solved.md) for a detailed walkthrough of the architectural bottlenecks encountered during development and the engineering solutions implemented to solve them.
 
@@ -55,7 +55,7 @@ A production-grade data engineering project that builds a complete **Medallion A
 
 File lineage is tracked via a **single PostgreSQL database** (currently Neon, migrating to Azure PostgreSQL):
 
-- **`file_lineage`** — Tracks individual files across every Medallion layer using the SHA-256 hash of the original CSV as the lineage key. Stores status, row counts, file sizes, error messages, and retry counts.
+- **`file_lineage`** — Tracks individual files across every Medallion layer using the MD5 hash of the original CSV as the lineage key. Stores status, row counts, file sizes, error messages, and retry counts.
 
 #### Performance Engineering
 
