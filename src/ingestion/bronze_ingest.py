@@ -66,10 +66,11 @@ def ingest_to_bronze(batch_limit: int = 0, airflow_run_id: str = None):
                 logging.info(f"Batch limit of {batch_limit} reached. Stopping.")
                 break
 
-            file_name = os.path.basename(file_path)
-
             # Step 1: Calculate the SHA-256 hash (the file's unique DNA)
             file_hash = calculate_file_hash(file_path)
+
+
+            file_name = os.path.basename(file_path)
 
             # Step 2: Check the in-memory cache — skip if already SUCCESS
             if tracker.is_file_processed(file_hash):
@@ -133,11 +134,16 @@ def ingest_to_bronze(batch_limit: int = 0, airflow_run_id: str = None):
                     logging.error(f"Could not move {file_name} to quarantine: {move_err}")
 
                 # Clean up any partial Parquet file that may have been written before the crash
+                # it is bcz polars is streaming engine so it creates the file the moment it starts scan and write in chunks
+                # hence if it fails in between the file will be corrupted , so we need to remove it
+                # else the next silver layer run will fail bcz it expects the file to be complete and valid parquete file
                 if os.path.exists(output_path):
                     os.remove(output_path)
 
+    # {processed_count}/{len(csv_files)} repressent no. of succesfull parquet files created / total csv files present in landing zone
     logging.info(f"Bronze ingestion complete. {processed_count}/{len(csv_files)} file(s) processed successfully.")
 
 
 if __name__ == "__main__":
     ingest_to_bronze()
+    
