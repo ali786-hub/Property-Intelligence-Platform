@@ -22,15 +22,16 @@ def build_transform_query(bronze_path: str, silver_path: str, airflow_run_id: st
     Constructs the DuckDB SQL statement to read the Bronze Parquet file,
     cleanse the data, inject V2 audit columns, and write out to the Silver Parquet file.
     """
-    # DuckDB requires forward slashes for file paths on all OS
+    # Windows paths use '\', but DuckDB's SQL parser treats '\' as an escape character.
+    # We must convert to universal forward slashes '/' so the SQL string doesn't crash.
     bronze_path = bronze_path.replace("\\", "/")
     silver_path = silver_path.replace("\\", "/")
 
     # Generate the current UTC timestamp for the _transformed_at audit column
     current_utc = datetime.now(timezone.utc).isoformat()
     
-    # Handle the airflow_run_id safely for SQL injection
-    # If no run_id is provided, insert a SQL NULL
+    # If airflow_run_id is None, we must inject the word "NULL" into the SQL string.
+    # Otherwise, we wrap the string in single quotes to make it a valid SQL VARCHAR.
     airflow_val = f"'{airflow_run_id}'" if airflow_run_id else "NULL"
 
     return f"""
@@ -41,7 +42,7 @@ def build_transform_query(bronze_path: str, silver_path: str, airflow_run_id: st
                 TRY_CAST(property_id AS BIGINT)     AS property_id,
                 TRY_CAST(location_id AS INTEGER)    AS location_id,
                 page_url,
-                MD5(page_url)                       AS url_hash,
+                SHA256(page_url)                     AS url_hash,
                 property_type,
                 TRY_CAST(price AS BIGINT)           AS raw_price,
                 location,
@@ -143,7 +144,7 @@ def transform_to_silver(batch_limit: int = 0, airflow_run_id: str = None):
 
     os.makedirs(SILVER_ZONE, exist_ok=True)
 
-    # Initialize a fast in-memory DuckDB connection
+    # ':memory:' creates a temporary, ultra-fast database entirely in RAM that vanishes when the script ends.
     duckdb_conn = duckdb.connect(database=':memory:')
 
     # Get the list of eligible files directly from the database (V2 Architecture)
@@ -185,11 +186,11 @@ def transform_to_silver(batch_limit: int = 0, airflow_run_id: str = None):
 
                 file_size = os.path.getsize(silver_path)
                 
-                # Fast row count directly from DuckDB Parquet reader
-                escaped_silver_path = silver_path.replace("\\", "/")
-                row_count = duckdb_conn.execute(
-                    f"SELECT COUNT(*) FROM read_parquet('{escaped_silver_path}')"
-                ).fetchone()[0]
+                # Syntax Breakdown:
+                # 1. execute(...) returns a 2D table object.
+                # 2. .fetchone() grabs the first row as a tuple: e.g., (15420,)
+                # 3. [0] extracts the integer out of the tuple: 15420
+                row_count = duckdb_conn.execute(f"SELECT COUNT(*) FROM read_parquet('{silver_path.replace('\\\\', '/')}')").fetchone()[0]
 
                 # Log SUCCESS to the lineage tracker buffer
                 tracker.log_result(
@@ -204,6 +205,7 @@ def transform_to_silver(batch_limit: int = 0, airflow_run_id: str = None):
                 logging.info(f"SUCCESS: {silver_filename} ({row_count:,} rows, {file_size / 1e6:.1f} MB)")
 
             except Exception as e:
+                # String slicing [:500] prevents massive 10k-character stack traces from bloating the Neon PostgreSQL database.
                 error_msg = str(e)[:500]
                 logging.error(f"FAILED: {bronze_filename} — {error_msg}")
                 
