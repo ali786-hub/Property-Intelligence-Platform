@@ -4,8 +4,13 @@ import shutil
 import hashlib
 import logging
 import polars as pl
+import sys
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+
+# Dynamically add root project directory so we can import 'src'
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+
 from src.helper_files.lineage import LineageTracker
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

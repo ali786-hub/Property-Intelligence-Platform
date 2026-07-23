@@ -1,6 +1,11 @@
-
 # this is the lineage tracker that will help us to track the lineage of the files that are processed by the pipeline
 # the database file contains essentials for db connections which includes connection pool and other things
+import os
+import sys
+
+# Dynamically add root project directory so we can import 'src'
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+
 from src.helper_files.database import DBConnection
 # First we define the constructor to create instances of this helper funciton LIneage tracker
 class LineageTracker:

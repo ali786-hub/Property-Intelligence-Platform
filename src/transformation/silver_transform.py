@@ -2,8 +2,12 @@ import os
 import glob
 import logging
 from datetime import datetime, timezone
+import sys
 from dotenv import load_dotenv
 import duckdb
+
+# Dynamically add root project directory so we can import 'src'
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from src.helper_files.lineage import LineageTracker
 from src.helper_files.database import DBConnection
@@ -190,7 +194,10 @@ def transform_to_silver(batch_limit: int = 0, airflow_run_id: str = None):
                 # 1. execute(...) returns a 2D table object.
                 # 2. .fetchone() grabs the first row as a tuple: e.g., (15420,)
                 # 3. [0] extracts the integer out of the tuple: 15420
-                row_count = duckdb_conn.execute(f"SELECT COUNT(*) FROM read_parquet('{silver_path.replace('\\\\', '/')}')").fetchone()[0]
+                escaped_silver = silver_path.replace("\\", "/")
+                row_count = duckdb_conn.execute(
+                    f"SELECT COUNT(*) FROM read_parquet('{escaped_silver}')"
+                ).fetchone()[0]
 
                 # Log SUCCESS to the lineage tracker buffer
                 tracker.log_result(

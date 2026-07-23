@@ -1,6 +1,11 @@
 import os
+import sys
 import glob
 from dotenv import load_dotenv
+
+# Dynamically add the root project directory to Python's module path so it can find 'src'
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+
 from src.helper_files.database import DBConnection
 
 # Load environment variables

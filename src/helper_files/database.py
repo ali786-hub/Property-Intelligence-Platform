@@ -10,19 +10,22 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Load environment variables
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME")
 
-if not DATABASE_URL:
-    logging.warning("DATABASE_URL environment variable is not set. Database connections will fail.")
+if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_NAME]):
+    logging.warning("DB credentials are not fully set in .env. Database connections will fail.")
 
 
 # ---------------------------------------------------------------
-# FIX 1: Lazy Pool Initialization
+# Lazy Pool Initialization
 # ---------------------------------------------------------------
-# The pool is no longer created at import time.
-# It is only created the first time _get_pool() is called.
-# This prevents the pipeline from crashing silently on startup
-# if the database is not yet reachable (e.g., cold cloud deployments).
+# The pool is only created the first time _get_pool() is called.
+# This prevents the pipeline from crashing on startup
+# if the database is not yet reachable.
 
 _connection_pool = None
 
@@ -38,8 +41,15 @@ def _get_pool() -> pool.SimpleConnectionPool:
 
     if _connection_pool is None:
         try:
+            # Passing individual params instead of a DSN url string.
+            # This way special characters like @ or # in the password don't break anything.
             _connection_pool = pool.SimpleConnectionPool(
-                1, 10, dsn=DATABASE_URL
+                1, 10,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                host=DB_HOST,
+                port=DB_PORT,
+                dbname=DB_NAME
             )
             logging.info("PostgreSQL connection pool initialized successfully.")
         except Exception as e:
