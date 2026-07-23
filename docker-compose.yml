@@ -24,6 +24,16 @@ x-airflow-common: &airflow-common
     # How Airflow connects to its own internal metadata database (the airflow-postgres container below)
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
     AIRFLOW__WEBSERVER__SECRET_KEY: propintel-dev-secret-key # A random security key for the UI session cookies
+    
+    # ---------------------------------------------------------
+    # PROPINTEL PIPELINE OVERRIDES
+    # ---------------------------------------------------------
+    # Force Airflow to install our custom packages on boot
+    _PIP_ADDITIONAL_REQUIREMENTS: "-r /opt/airflow/requirements.txt"
+    # Override Windows .env paths with Linux container paths
+    LANDING_ZONE: "/opt/airflow/data/landing_zone"
+    BRONZE_LAYER: "/opt/airflow/data/bronze_layer"
+    SILVER_LAYER: "/opt/airflow/data/silver_layer"
 
   volumes:
     # Volumes map your Windows laptop folders to the Container's internal folders.
@@ -33,6 +43,7 @@ x-airflow-common: &airflow-common
     - ./src:/opt/airflow/src
     - ./.env:/opt/airflow/.env
     - ./data:/opt/airflow/data
+    - ./requirements.txt:/opt/airflow/requirements.txt
 
   depends_on:
     # This rule says: "Do not start this Airflow container until the postgres database is healthy"
