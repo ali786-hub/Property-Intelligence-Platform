@@ -1,6 +1,5 @@
 polars
 duckdb
 psycopg2-binary
-fastapi
-uvicorn
 python-dotenv
+pyarrow
