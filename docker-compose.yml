@@ -1,0 +1,107 @@
+# ============================================================
+# PropIntel Airflow: Local Development Setup
+# ============================================================
+# Run with:  docker-compose up -d
+# Stop with: docker-compose down
+# UI:        http://localhost:8080 (admin / admin)
+# ============================================================
+
+# ------------------------------------------------------------
+# YAML Anchors (&airflow-common)
+# Think of this block like a Python base class or a variable.
+# Instead of writing the same settings (like Python version and environment variables) 
+# for every single Airflow container (webserver, scheduler, init), 
+# we define them once here and "inherit" them later using `<<: *airflow-common`.
+# ------------------------------------------------------------
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.5-python3.11    # The exact Docker image to download from the internet
+  environment:
+    # Airflow configuration injected as environment variables
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor   # Tells Airflow to run tasks locally in this container (not on a massive Kubernetes cluster)
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'    # We don't want the 30+ default tutorial DAGs cluttering our UI
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags  # Where Airflow should look for our DAG files inside the container
+    # How Airflow connects to its own internal metadata database (the airflow-postgres container below)
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__WEBSERVER__SECRET_KEY: propintel-dev-secret-key # A random security key for the UI session cookies
+  
+  volumes:
+    # Volumes map your Windows laptop folders to the Container's internal folders.
+    # Format is: [Your Windows Path] : [The Container's Linux Path]
+    # Because of this, if you edit a file on Windows, Airflow sees it instantly!
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./.env:/opt/airflow/.env
+    - ./data:/opt/airflow/data
+  
+  depends_on:
+    # This rule says: "Do not start this Airflow container until the postgres database is healthy"
+    airflow-postgres:
+      condition: service_healthy
+
+# ------------------------------------------------------------
+# Services Block
+# This defines the actual containers that will boot up when you run `docker-compose up`.
+# ------------------------------------------------------------
+services:
+
+  # SERVICE 1: The Metadata Database
+  # Airflow needs its own database just to track DAG runs, task histories, and UI users.
+  # Note: This is separate from your Azure PostgreSQL!
+  airflow-postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      # Exposes the container's port 5432 to your laptop's port 5433
+      # (We use 5433 locally so it doesn't conflict if you have a local postgres running on 5432)
+      - "5433:5432"
+    healthcheck:
+      # A test to ensure the database is fully awake before Airflow tries to connect
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      retries: 5
+
+  # SERVICE 2: The Initializer
+  # This is a one-time script that runs when you boot up.
+  # It sets up the database tables and creates your UI login credentials.
+  airflow-init:
+    <<: *airflow-common  # INHERIT all the settings from the block at the top!
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@propintel.dev
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+
+  # SERVICE 3: The Web Server
+  # This is the beautiful UI you see when you go to http://localhost:8080
+  airflow-webserver:
+    <<: *airflow-common  # INHERIT again!
+    command: airflow webserver --port 8080
+    ports:
+      - "8080:8080"      # Maps the container's UI to your Windows browser
+    depends_on:
+      airflow-init:
+        # Don't start the UI until the admin user is created
+        condition: service_completed_successfully
+
+  # SERVICE 4: The Scheduler
+  # This is the invisible background brain of Airflow. 
+  # It constantly reads your DAGs folder and triggers tasks when it is time.
+  airflow-scheduler:
+    <<: *airflow-common  # INHERIT again!
+    command: airflow scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
