@@ -3,3 +3,5 @@ duckdb
 psycopg2-binary
 python-dotenv
 pyarrow
+sqlalchemy
+pyiceberg[sql-postgres,pyarrow]

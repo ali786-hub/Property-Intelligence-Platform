@@ -61,7 +61,12 @@ def build_transform_query(bronze_path: str, silver_path: str, airflow_run_id: st
                 -- 2. MISSING DATA HANDLING: Filter out rows where date_added contains corruption symbols (#)
                 CASE
                     WHEN date_added LIKE '%#%' THEN NULL
-                    ELSE TRY_CAST(date_added AS VARCHAR)
+                    ELSE COALESCE(
+                        TRY_CAST(date_added AS DATE),
+                        TRY_CAST(strptime(date_added, '%B %d, %Y') AS DATE),
+                        TRY_CAST(strptime(date_added, '%d-%m-%Y') AS DATE),
+                        TRY_CAST(strptime(date_added, '%m/%d/%Y') AS DATE)
+                    )
                 END AS date_added,
 
                 -- 3. COALESCE: Fill in empty agency/agent with defaults
@@ -150,6 +155,7 @@ def transform_to_silver(batch_limit: int = 0, airflow_run_id: str = None):
 
     # ':memory:' creates a temporary, ultra-fast database entirely in RAM that vanishes when the script ends.
     duckdb_conn = duckdb.connect(database=':memory:')
+    duckdb_conn.execute("PRAGMA memory_limit='2GB';")
 
     # Get the list of eligible files directly from the database (V2 Architecture)
     eligible_files = get_eligible_bronze_files()

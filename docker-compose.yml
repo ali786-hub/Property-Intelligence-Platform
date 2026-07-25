@@ -22,9 +22,11 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false' # We don't want the 30+ default tutorial DAGs cluttering our UI
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags # Where Airflow should look for our DAG files inside the container
     # How Airflow connects to its own internal metadata database (the airflow-postgres container below)
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    # Connection string format: driver://username:password@hostname/database_name
+    # 'airflow-postgres' is the Docker service name below — Docker resolves it like a hostname on a private network
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin_user:admin_pass@airflow-postgres/airflow_metadata
     AIRFLOW__WEBSERVER__SECRET_KEY: propintel-dev-secret-key # A random security key for the UI session cookies
-    
+
     # ---------------------------------------------------------
     # PROPINTEL PIPELINE OVERRIDES
     # ---------------------------------------------------------
@@ -32,8 +34,10 @@ x-airflow-common: &airflow-common
     _PIP_ADDITIONAL_REQUIREMENTS: "-r /opt/airflow/requirements.txt"
     # Override Windows .env paths with Linux container paths
     LANDING_ZONE: "/opt/airflow/data/landing_zone"
-    BRONZE_LAYER: "/opt/airflow/data/bronze_layer"
-    SILVER_LAYER: "/opt/airflow/data/silver_layer"
+    BRONZE_ZONE: "/opt/airflow/data/bronze"
+    SILVER_ZONE: "/opt/airflow/data/silver"
+    QUARANTINE_ZONE: "/opt/airflow/data/quarantine"
+    GOLD_ZONE: "/opt/airflow/data/gold"
 
   volumes:
     # Volumes map your Windows laptop folders to the Container's internal folders.
@@ -42,7 +46,8 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./src:/opt/airflow/src
     - ./.env:/opt/airflow/.env
-    - ./data:/opt/airflow/data
+    # We map ../data because the user's data folder is one level UP from PropI
+    - ../data:/opt/airflow/data
     - ./requirements.txt:/opt/airflow/requirements.txt
 
   depends_on:
@@ -62,16 +67,16 @@ services:
   airflow-postgres:
     image: postgres:15
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: admin_user # Must match the username in SQL_ALCHEMY_CONN above
+      POSTGRES_PASSWORD: admin_pass # Must match the password in SQL_ALCHEMY_CONN above
+      POSTGRES_DB: airflow_metadata # Must match the database name in SQL_ALCHEMY_CONN above
     ports:
       # Exposes the container's port 5432 to your laptop's port 5433
       # (We use 5433 locally so it doesn't conflict if you have a local postgres running on 5432)
       - "5433:5432"
     healthcheck:
       # A test to ensure the database is fully awake before Airflow tries to connect
-      test: [ "CMD-SHELL", "pg_isready -U airflow" ]
+      test: [ "CMD-SHELL", "pg_isready -U admin_user" ]
       interval: 5s
       retries: 5
 

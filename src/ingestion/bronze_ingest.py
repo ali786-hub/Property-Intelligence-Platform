@@ -89,7 +89,9 @@ def ingest_to_bronze(batch_limit: int = 0, airflow_run_id: str = None):
             try:
                 # Polars LazyFrame: reads the CSV in streaming chunks, never loads
                 # the entire file into RAM, and writes directly to Parquet on disk.
-                lf = pl.scan_csv(file_path, ignore_errors=True)
+                # We set infer_schema_length=0 to read ALL columns as raw Strings. 
+                # This guarantees the Bronze layer never crashes on dirty data types.
+                lf = pl.scan_csv(file_path, ignore_errors=True, infer_schema_length=0)
 
                 # Inject audit metadata columns so every row knows where it came from
                 lf = lf.with_columns(

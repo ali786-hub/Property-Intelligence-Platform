@@ -15,7 +15,9 @@ sys.path.insert(0, '/opt/airflow')
 # Now we can safely import our pipeline functions
 from src.ingestion.bronze_ingest import ingest_to_bronze
 from src.transformation.silver_transform import transform_to_silver
-from src.helper_files.database import DBConnection
+from src.loading.gold_publish import publish_to_gold
+#we dont ened lineage_tracker or DBconnection files/functions they are encapsulated inside 
+#the ingestion and transformation py files 
 
 # Set up logging for the DAG file itself
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -46,6 +48,14 @@ def run_silver_layer(**kwargs):
     logger.info("Silver Layer completed successfully.")
     return "Silver Done"
 
+def run_gold_layer(**kwargs):
+    run_id = kwargs['run_id']
+    logger.info(f"Starting Gold Layer for Airflow Run: {run_id}")
+    
+    publish_to_gold(airflow_run_id=run_id)
+    
+    logger.info("Gold Layer completed successfully.")
+    return "Gold Done"
 
 # =================================================================
 # DAG DEFINITION
@@ -83,5 +93,12 @@ with DAG(
         provide_context=True,
     )
 
+    # Task 3: Gold Publishing (Apache Iceberg)
+    gold_task = PythonOperator(
+        task_id='load_gold_iceberg',
+        python_callable=run_gold_layer,
+        provide_context=True,
+    )
+
     # Dependency Chain
-    bronze_task >> silver_task
+    bronze_task >> silver_task >> gold_task
