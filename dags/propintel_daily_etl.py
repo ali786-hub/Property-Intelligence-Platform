@@ -76,6 +76,7 @@ with DAG(
     schedule_interval='@daily',
     start_date=datetime(2025, 1, 1),
     catchup=False,
+    max_active_runs=1,
     tags=['production', 'etl'],
 ) as dag:
 

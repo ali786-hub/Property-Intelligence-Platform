@@ -63,9 +63,9 @@ def build_transform_query(bronze_path: str, silver_path: str, airflow_run_id: st
                     WHEN date_added LIKE '%#%' THEN NULL
                     ELSE COALESCE(
                         TRY_CAST(date_added AS DATE),
-                        TRY_CAST(strptime(date_added, '%B %d, %Y') AS DATE),
-                        TRY_CAST(strptime(date_added, '%d-%m-%Y') AS DATE),
-                        TRY_CAST(strptime(date_added, '%m/%d/%Y') AS DATE)
+                        try_strptime(date_added, '%B %d, %Y')::DATE,
+                        try_strptime(date_added, '%m-%d-%Y')::DATE,
+                        try_strptime(date_added, '%m/%d/%Y')::DATE
                     )
                 END AS date_added,
 

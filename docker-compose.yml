@@ -15,7 +15,8 @@
 # this is because airflow expects us to have these settings in all these files : webserver, scheduler, and init.
 # ------------------------------------------------------------
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.10.5-python3.11 # The exact Docker image to download from the internet
+  build: . # The exact Docker image to download from the internet
+  # image: apache/airflow:2.10.5-python3.11 
   environment:
     # Airflow configuration injected as environment variables
     AIRFLOW__CORE__EXECUTOR: LocalExecutor # Tells Airflow to run tasks locally in this container (not on a massive Kubernetes cluster)
