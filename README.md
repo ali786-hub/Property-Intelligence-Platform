@@ -1,10 +1,12 @@
 # PropIntel — Property Intelligence Platform
 
-A production-grade data engineering pipeline that processes **Pakistani real estate market data** through a full **Medallion Architecture** (Landing → Bronze → Silver → Gold). Raw property listings from Zameen.com are ingested, cleansed, standardized, and loaded into an **Apache Iceberg** lakehouse with **SCD Type 2** historical tracking — enabling analysts to query the exact price of any property at any point in time.
+![PropIntel Architecture](architecture.png)
+
+A production-grade data engineering pipeline that processes **simulated Pakistani real estate market data** through a full **Medallion Architecture** (Landing → Bronze → Silver → Gold). Synthesized daily property listings (generated from a base Zameen.com Kaggle dataset) are ingested, cleansed, standardized, and loaded into an **Apache Iceberg** lakehouse with **SCD Type 2** historical tracking — enabling analysts to query the exact price of any property at any point in time.
 
 | | |
 |---|---|
-| **Data Source** | [Zameen.com Pakistan Real Estate](https://www.kaggle.com/) — daily CSV snapshots, ~150K rows each |
+| **Data Source** | [Zameen.com Pakistan Real Estate (Kaggle)](https://www.kaggle.com/) — synthesized daily CSV snapshots, ~150K rows each |
 | **Scale** | 122+ files × ~50 MB = ~6 GB raw (architecture designed for TB scale) |
 | **Orchestration** | Apache Airflow (Dockerized, `@daily` schedule) |
 | **Compute** | Polars (streaming ingestion), DuckDB (SQL transforms + SCD2 merge) |
