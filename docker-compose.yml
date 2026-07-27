@@ -28,18 +28,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin_user:admin_pass@airflow-postgres/airflow_metadata
     AIRFLOW__WEBSERVER__SECRET_KEY: propintel-dev-secret-key # A random security key for the UI session cookies
 
-    # ---------------------------------------------------------
-    # PROPINTEL PIPELINE OVERRIDES
-    # ---------------------------------------------------------
-    # Force Airflow to install our custom packages on boot
-    _PIP_ADDITIONAL_REQUIREMENTS: "-r /opt/airflow/requirements.txt"
-    # Override Windows .env paths with Linux container paths
-    LANDING_ZONE: "/opt/airflow/data/landing_zone"
-    BRONZE_ZONE: "/opt/airflow/data/bronze"
-    SILVER_ZONE: "/opt/airflow/data/silver"
-    QUARANTINE_ZONE: "/opt/airflow/data/quarantine"
-    GOLD_ZONE: "/opt/airflow/data/gold"
-
   volumes:
     # Volumes map your Windows laptop folders to the Container's internal folders.
     # Format is: [Your Windows Path] : [The Container's Linux Path]

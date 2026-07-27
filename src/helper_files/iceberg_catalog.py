@@ -1,5 +1,16 @@
 import os
+
+# ---------------------------------------------------------
+# PYICEBERG CORE IMPORTS
+# ---------------------------------------------------------
+
+# SqlCatalog: The core class that acts as our "Vault Architect".
+# This connects to Azure PostgreSQL to manage the 'iceberg_tables' pointer.
 from pyiceberg.catalog.sql import SqlCatalog
+
+# Schema & Types: Used to define the exact physical shape of our tables.
+# Iceberg requires strict types (e.g., LongType, StringType) so that
+# query engines know exactly what data format to expect in the Parquet files.
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
     LongType,
@@ -10,6 +21,12 @@ from pyiceberg.types import (
     DateType,
     NestedField,
 )
+
+# Partitioning: The structural logic for creating folders on the hard drive.
+# PartitionSpec: Defines the overall rule (e.g., "Group data by City").
+# PartitionField: Defines the specific column to group by.
+# IdentityTransform: Tells Iceberg to use the exact string name (e.g., 'Lahore') 
+# for the folder name (city=Lahore) instead of hashing or truncating it.
 from pyiceberg.partitioning import PartitionSpec, PartitionField
 from pyiceberg.transforms import IdentityTransform
 
@@ -19,10 +36,28 @@ def get_catalog():
     Creates the necessary directories for the warehouse if they don't exist.
     """
     gold_zone = os.getenv("GOLD_ZONE", "C:/Omnijourney_Kofking_github/data/gold")
-    warehouse_path = os.path.join(gold_zone, "warehouse").replace("\\", "/")
     
-    # Ensure local warehouse directories exist
-    os.makedirs(warehouse_path, exist_ok=True)
+    # Safely construct the warehouse path without os.path.join which can inject backslashes
+    if gold_zone.endswith("/"):
+        local_warehouse_path = f"{gold_zone}warehouse"
+    else:
+        local_warehouse_path = f"{gold_zone}/warehouse"
+    
+    # Ensure local warehouse directories exist ONLY if it's a local path
+    if not (local_warehouse_path.startswith("abfs://") or local_warehouse_path.startswith("azure://")):
+        os.makedirs(local_warehouse_path, exist_ok=True)
+        
+        # PyIceberg on Windows crashes if it sees "file:///C:/". 
+        # Safely strip the drive letter (C:) for local Windows paths.
+        if local_warehouse_path[1] == ':':
+            iceberg_warehouse_uri = local_warehouse_path[2:]
+        else:
+            iceberg_warehouse_uri = local_warehouse_path
+    else:
+        # If it is a cloud path, we pass it exactly as-is
+        iceberg_warehouse_uri = local_warehouse_path
+    
+    from urllib.parse import quote_plus
     
     # Get DB credentials from .env
     db_user = os.getenv("DB_USER")
@@ -31,17 +66,30 @@ def get_catalog():
     db_port = os.getenv("DB_PORT", "5432")
     db_name = os.getenv("DB_NAME", "postgres")
     
-    # Construct PostgreSQL URI (psycopg2 is standard for sqlalchemy with postgres)
-    catalog_uri = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+    # URL-encode credentials to safely handle special characters like '@', '#', or ':'
+    user_encoded = quote_plus(db_user) if db_user else ""
+    pass_encoded = quote_plus(db_password) if db_password else ""
 
-    # Initialize PyIceberg catalog pointing to the central PostgreSQL DB
-    catalog = SqlCatalog(
-        "default",
-        **{
-            "uri": catalog_uri,
-            "warehouse": warehouse_path,
-        },
-    )
+    # Construct PostgreSQL URI (psycopg2 is standard for sqlalchemy with postgres)
+    postgres_conn = f"postgresql+psycopg2://{user_encoded}:{pass_encoded}@{db_host}:{db_port}/{db_name}"
+
+    # Initialize kwargs for the catalog
+    catalog_kwargs = {
+        "uri": postgres_conn,
+        "warehouse": iceberg_warehouse_uri,
+    }
+
+    # If the warehouse is in Azure ADLS Gen2, PyIceberg needs the credentials
+    if local_warehouse_path.startswith("abfs://") or local_warehouse_path.startswith("azure://"):
+        account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+        account_key = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
+        if account_name and account_key:
+            catalog_kwargs["adls.account-name"] = account_name
+            catalog_kwargs["adls.account-key"] = account_key
+        else:
+            logging.warning("Warehouse path is Azure, but AZURE_STORAGE_ACCOUNT_NAME or KEY is missing from .env")
+
+    catalog = SqlCatalog("default", **catalog_kwargs)
     return catalog
 
 def get_gold_schema() -> Schema:

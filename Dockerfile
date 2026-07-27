@@ -12,6 +12,11 @@ RUN apt-get update \
 
 USER airflow
 
-# Install Python packages
+# Install Airflow and its database driver
 COPY requirements.txt /requirements.txt
-RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" -r /requirements.txt
+RUN pip install --no-cache-dir "apache-airflow==2.10.4" psycopg2-binary
+
+# Create an isolated virtual environment in /tmp to prevent Docker volume shadowing
+RUN python -m venv /tmp/propintel_venv
+RUN /tmp/propintel_venv/bin/pip install --default-timeout=1000 --no-cache-dir -r /requirements.txt
+RUN /tmp/propintel_venv/bin/pip install --default-timeout=1000 --no-cache-dir adlfs azure-storage-blob

@@ -1,61 +1,9 @@
 import sys
 import os
 import logging
-from airflow import DAG
-from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
-
-# =================================================================
-# PATH INJECTION
-# Airflow runs in /opt/airflow. Our custom modules are in /opt/airflow/src.
-# We must inject this into sys.path so Python can find our code.
-# =================================================================
-sys.path.insert(0, '/opt/airflow')
-
-# Now we can safely import our pipeline functions
-from src.ingestion.bronze_ingest import ingest_to_bronze
-from src.transformation.silver_transform import transform_to_silver
-from src.loading.gold_publish import publish_to_gold
-#we dont ened lineage_tracker or DBconnection files/functions they are encapsulated inside 
-#the ingestion and transformation py files 
-
-# Set up logging for the DAG file itself
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# =================================================================
-# AIRFLOW WRAPPER FUNCTIONS
-# Airflow injects a 'context' dictionary into tasks via **kwargs.
-# We extract 'run_id' to pass it down to our LineageTracker!
-# =================================================================
-
-def run_bronze_layer(**kwargs):
-    run_id = kwargs['run_id']
-    logger.info(f"Starting Bronze Layer for Airflow Run: {run_id}")
-    
-    # We pass the airflow_run_id so it gets logged in the PostgreSQL lineage table
-    ingest_to_bronze(airflow_run_id=run_id)
-    
-    logger.info("Bronze Layer completed successfully.")
-    return "Bronze Done"
-
-def run_silver_layer(**kwargs):
-    run_id = kwargs['run_id']
-    logger.info(f"Starting Silver Layer for Airflow Run: {run_id}")
-    
-    transform_to_silver(airflow_run_id=run_id)
-    
-    logger.info("Silver Layer completed successfully.")
-    return "Silver Done"
-
-def run_gold_layer(**kwargs):
-    run_id = kwargs['run_id']
-    logger.info(f"Starting Gold Layer for Airflow Run: {run_id}")
-    
-    publish_to_gold(airflow_run_id=run_id)
-    
-    logger.info("Gold Layer completed successfully.")
-    return "Gold Done"
+from airflow import DAG
+from airflow.operators.bash import BashOperator
 
 # =================================================================
 # DAG DEFINITION
@@ -72,7 +20,7 @@ default_args = {
 with DAG(
     dag_id='propintel_daily_etl',
     default_args=default_args,
-    description='Main ETL Pipeline: Bronze -> Silver',
+    description='Main ETL Pipeline: Bronze -> Silver -> Gold',
     schedule_interval='@daily',
     start_date=datetime(2025, 1, 1),
     catchup=False,
@@ -81,24 +29,24 @@ with DAG(
 ) as dag:
 
     # Task 1: Bronze Ingestion
-    bronze_task = PythonOperator(
+    bronze_task = BashOperator(
         task_id='ingest_bronze',
-        python_callable=run_bronze_layer,
-        provide_context=True, # Critical: This tells Airflow to pass **kwargs
+        bash_command='/tmp/propintel_venv/bin/python /opt/airflow/src/ingestion/bronze_ingest.py',
+        env={'AIRFLOW_RUN_ID': '{{ run_id }}', **os.environ},
     )
 
     # Task 2: Silver Transformation
-    silver_task = PythonOperator(
+    silver_task = BashOperator(
         task_id='transform_silver',
-        python_callable=run_silver_layer,
-        provide_context=True,
+        bash_command='/tmp/propintel_venv/bin/python /opt/airflow/src/transformation/silver_transform.py',
+        env={'AIRFLOW_RUN_ID': '{{ run_id }}', **os.environ},
     )
 
     # Task 3: Gold Publishing (Apache Iceberg)
-    gold_task = PythonOperator(
+    gold_task = BashOperator(
         task_id='load_gold_iceberg',
-        python_callable=run_gold_layer,
-        provide_context=True,
+        bash_command='/tmp/propintel_venv/bin/python /opt/airflow/src/loading/gold_publish.py',
+        env={'AIRFLOW_RUN_ID': '{{ run_id }}', **os.environ},
     )
 
     # Dependency Chain
