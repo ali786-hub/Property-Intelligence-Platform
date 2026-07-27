@@ -74,6 +74,13 @@ flowchart TB
 
 ---
 
+## 🖥️ Interactive SCD2 Historical Dashboard
+A custom-built, interactive HTML and JavaScript dashboard that allows you to easily view and explore the Slowly Changing Dimension Type 2 (SCD2) history of the property database.
+
+By searching any property ID, users can instantly view its full historical price timeline, showcasing when and how the price changed, which listings are active or expired, and how the chronological chaining (`valid_from` to `valid_to`) is maintained. This dashboard acts as a direct validation tool for verifying the integrity of the Gold layer.
+
+---
+
 ## ⚙️ What Happens at Each Layer
 
 ### 1. Ingestion — Google Colab Streaming Simulator
@@ -125,12 +132,12 @@ Visual proof of the Medallion architecture deployed successfully across Azure St
 ![Azure Data Lake](src/utils/Pics_for_readme/PropiDataLakestructure.png)
 
 ### Airflow Orchestration (DAG & Gantt)
-Proving seamless scheduling and parallel execution across 122+ files.
+Proving seamless scheduling and parallel execution across 122 files.
 ![Airflow DAG](src/utils/Pics_for_readme/Pairflow_dag_EtL.png)
 ![Airflow Gantt Chart](src/utils/Pics_for_readme/Propi_airflow_gant_chart.png)
 
 ### Postgres Lineage Tracker (Idempotency)
-Direct query output from Azure PostgreSQL proving that Airflow is flawlessly tracking the success state of every single file.
+Direct query output from Azure PostgreSQL proving that Airflow is Consistently tracking the success state of every single file.
 ![Postgres Lineage](src/utils/Pics_for_readme/PLineage_tracker_airflow.png)
 
 ### Gold Layer: Apache Iceberg & SCD Type 2
@@ -145,15 +152,6 @@ Uploading existing CSV files from Google Drive directly to Azure Storage Gen2 in
 ### Interactive Rollback System
 Custom CLI tool for nuclear resets and data rollback.
 ![Rollback Tool](src/utils/Pics_for_readme/Pipeline_rollback.png)
-
-### Bronze Reset DAG (Safe Teardown)
-Airflow DAG for safely tearing down and rebuilding the Bronze layer without affecting Silver or Gold.
-![Bronze Reset DAG](src/utils/Pics_for_readme/p.Bronze_reset.png)
-
-### Azure Portal — Provisioned Cloud Resources
-The actual Azure resource group showing the provisioned VM, Storage Account, PostgreSQL server, and networking.
-![Azure Resources](src/utils/Pics_for_readme/PropI_cloud_resources.png)
-
 
 ---
 
