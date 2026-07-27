@@ -227,6 +227,8 @@ def process_table_bulk(catalog, file_list, purpose_filter, iceberg_table_name, a
     con = duckdb.connect()
     con.execute("PRAGMA memory_limit='4GB'")
     con.execute("PRAGMA temp_directory='/tmp/duckdb_temp'")
+    con.execute("PRAGMA threads=2")
+    con.execute("PRAGMA preserve_insertion_order=false")
 
     if SILVER_ZONE and (SILVER_ZONE.startswith("abfs://") or SILVER_ZONE.startswith("azure://")):
         con.register_filesystem(silver_fs)
