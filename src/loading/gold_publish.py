@@ -237,6 +237,8 @@ def process_table_bulk(catalog, file_list, purpose_filter, iceberg_table_name, a
     table = catalog.load_table(iceberg_table_name)
     current_utc = datetime.now(timezone.utc).isoformat()
     
+    anomaly_threshold = 100000 if purpose_filter == 'For Sale' else 1000
+    
     # ---------------------------------------------------------
     # PARTITIONED BULK SCD TYPE 2 LOGIC (WINDOW FUNCTIONS)
     # ---------------------------------------------------------
