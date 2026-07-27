@@ -1,7 +1,11 @@
 import os
 import sys
 import duckdb
+import io
 from dotenv import load_dotenv
+
+# Force UTF-8 encoding for Windows terminals to support emojis
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 from src.helper_files.iceberg_catalog import get_catalog
@@ -130,6 +134,59 @@ def verify_gold_layer():
                 dt = datetime.fromtimestamp(snap.timestamp_ms / 1000.0)
                 print(f"  - Snapshot ID: {snap.snapshot_id} | Created At: {dt}")
         
+        # Test 9: Export Full SCD2 History
+        print("\n[TEST 9] Exporting Full SCD Type 2 Timeline to CSV")
+        if properties_with_history > 0:
+            export_query = """
+            SELECT 
+                property_id, city, location, property_type, price, is_current, valid_from, valid_to
+            FROM gold_sales
+            WHERE property_id IN (
+                SELECT property_id FROM gold_sales GROUP BY property_id HAVING COUNT(*) > 1
+            )
+            ORDER BY city, property_id, valid_from
+            """
+            print("Extracting full SCD2 history for all records...")
+            df = con.execute(export_query).fetchdf()
+            
+            output_file = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../SCD2_Full_Timeline.csv'))
+            df.to_csv(output_file, index=False)
+            print(f"✅ SUCCESS! {len(df):,} historical records exported.")
+            print(f"Open this file in Excel to see the exact price history timeline for every property: {output_file}")
+        else:
+            print("No history to export yet.")
+            
+        # Test 10: Deep Observation (Top 2 SCD2 Timelines)
+        print("\n[TEST 10] SCD Type 2 - Deep Observation")
+        print("Finding 2 properties that actually changed their price multiple times...")
+        print("Note: In SCD Type 2, if a price does NOT change for 5 days, it does NOT create 5 rows!")
+        print("Instead, it creates ONE row with a valid_to date spanning those 5 days. This saves millions of rows of space.")
+        
+        if properties_with_history > 0:
+            top_props = con.execute("""
+                SELECT property_id, COUNT(*) as changes
+                FROM gold_sales 
+                GROUP BY property_id 
+                ORDER BY changes DESC 
+                LIMIT 2
+            """).fetchall()
+            
+            for row in top_props:
+                prop_id = row[0]
+                changes = row[1]
+                print(f"\n🏠 PROPERTY ID: {prop_id} (Changed price {changes} times over the 21 days!)")
+                print("-" * 80)
+                history = con.execute(f"""
+                    SELECT valid_from, valid_to, is_current, price, city, location
+                    FROM gold_sales
+                    WHERE property_id = {prop_id}
+                    ORDER BY valid_from
+                """).fetchdf()
+                print(history.to_string(index=False))
+                print("-" * 80)
+        else:
+            print("No history to observe yet.")
+            
     except Exception as e:
         print(f"\n[ERROR] Verification failed: {e}")
         import traceback

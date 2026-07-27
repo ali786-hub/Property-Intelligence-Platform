@@ -225,7 +225,7 @@ def process_table_bulk(catalog, file_list, purpose_filter, iceberg_table_name, a
     (e.g., initial deployment, disaster recovery, schema migration).
     """
     con = duckdb.connect()
-    con.execute("PRAGMA memory_limit='6GB'")
+    con.execute("PRAGMA memory_limit='4GB'")
     con.execute("PRAGMA temp_directory='/tmp/duckdb_temp'")
 
     if SILVER_ZONE and (SILVER_ZONE.startswith("abfs://") or SILVER_ZONE.startswith("azure://")):
