@@ -1,71 +1,67 @@
-# PropIntel — Property Intelligence Platform
+# PropIntel — Cloud-Native Data Lakehouse
 
-![PropIntel Architecture](architecture.png)
+A production-grade, fully cloud-native data engineering pipeline that processes real estate market data through a complete **Medallion Architecture** (Landing → Bronze → Silver → Gold) on **Azure Data Lake Storage Gen2**. 
 
-A production-grade data engineering pipeline that processes **simulated Pakistani real estate market data** through a full **Medallion Architecture** (Landing → Bronze → Silver → Gold). Synthesized daily property listings (generated from a base Zameen.com Kaggle dataset) are ingested, cleansed, standardized, and loaded into an **Apache Iceberg** lakehouse with **SCD Type 2** historical tracking — enabling analysts to query the exact price of any property at any point in time.
+The pipeline begins with a multi-threaded **Google Colab** script that pulls existing CSV files from a connected Google Drive folder and uploads them in parallel to the Azure Blob landing zone, simulating a streaming ingestion source without paid API access. An **Apache Airflow** DAG then orchestrates the data through Polars (Bronze) and DuckDB (Silver/Gold), ultimately loading it into an **Apache Iceberg** lakehouse with **SCD Type 2** historical tracking. All metadata and file lineage are centrally audited in **Azure PostgreSQL**.
 
 | | |
 |---|---|
-| **Data Source** | [Zameen.com Pakistan Real Estate (Kaggle)](https://www.kaggle.com/) — synthesized daily CSV snapshots, ~150K rows each |
-| **Scale** | 122+ files × ~50 MB = ~6 GB raw (architecture designed for TB scale) |
+| **Data Source** | Multi-threaded Google Colab script pulling CSVs from Google Drive to Azure Blob |
+| **Scale** | Fully cloud-native. Designed for TB scale processing via DuckDB + Iceberg. |
 | **Orchestration** | Apache Airflow (Dockerized, `@daily` schedule) |
-| **Compute** | Polars (streaming ingestion), DuckDB (SQL transforms + SCD2 merge) |
-| **Storage** | Apache Parquet (Bronze/Silver), Apache Iceberg (Gold) |
-| **State Management** | Azure PostgreSQL — file lineage audit log + Iceberg SQL Catalog |
+| **Compute** | Polars (Bronze streaming), DuckDB (Silver SQL transforms + Gold SCD2 merge) |
+| **Storage** | Azure Data Lake Storage Gen2 (ADLS) — Apache Parquet / Apache Iceberg |
+| **State Management** | Azure PostgreSQL Flexible Server — file lineage audit log + Iceberg SQL Catalog |
 
 ---
 
-## Architecture
+## 🏗️ Architecture Flow
 
 > The diagram below is written in [Mermaid.js](https://mermaid.js.org/). GitHub renders it automatically as a visual flowchart.
 
 ```mermaid
 flowchart TB
-    subgraph source [" "]
+    subgraph source ["🚀 Google Colab (Ingestion)"]
         direction LR
-        CSV["📄 Raw CSV Files<br/>(Zameen.com / Kaggle)"]
+        COLAB["🐍 Python Multi-threaded Uploader<br/><i>Google Drive to Azure Blob Upload</i>"]
     end
 
-    subgraph airflow ["🔄 Apache Airflow (Docker)"]
+    subgraph airflow ["🔄 Apache Airflow"]
         DAG["propintel_daily_etl.py<br/>Bronze → Silver → Gold"]
     end
 
-    subgraph local ["💻 Local Filesystem"]
+    subgraph cloud_storage ["☁️ Azure Data Lake Storage Gen2"]
         direction TB
 
+        subgraph landing ["Landing Zone"]
+            B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
+        end
+
         subgraph bronze ["Bronze Layer"]
-            B_IN["Landing Zone<br/><code>data/landing_zone/*.csv</code>"]
             B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
-            B_OUT["Bronze Zone<br/><code>data/bronze/*.parquet</code>"]
-            B_ARCH["Archive Zone<br/><code>data/archive_zone/</code>"]
+            B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
             B_IN --> B_ENGINE --> B_OUT
-            B_ENGINE -.-> B_ARCH
         end
 
         subgraph silver ["Silver Layer"]
-            S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing,<br/>unit normalization, date parsing</i>"]
-            S_OUT["Silver Zone<br/><code>data/silver/*_clean.parquet</code>"]
-            S_ENGINE --> S_OUT
+            S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
+            S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
+            B_OUT --> S_ENGINE --> S_OUT
         end
 
         subgraph gold ["Gold Layer"]
-            G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 incremental merge</i>"]
-            G_OUT["Iceberg Warehouse<br/><code>data/gold/warehouse/propintel/</code>"]
-            G_ENGINE --> G_OUT
-        end
-
-        B_OUT --> S_ENGINE
-        S_OUT --> G_ENGINE
-    end
-
-    subgraph cloud ["☁️ Azure Cloud"]
-        subgraph pg ["Azure PostgreSQL Flexible Server"]
-            LINEAGE[("file_lineage<br/>(Audit Log)")]
-            CATALOG[("iceberg_tables<br/>(SQL Catalog)")]
+            G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
+            G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
+            S_OUT --> G_ENGINE --> G_OUT
         end
     end
 
-    CSV --> B_IN
+    subgraph cloud_db ["☁️ Azure PostgreSQL Flexible Server"]
+        LINEAGE[("file_lineage<br/>(Audit Log / Idempotency)")]
+        CATALOG[("iceberg_tables<br/>(PyIceberg SQL Catalog)")]
+    end
+
+    source --> B_IN
     DAG -. "triggers" .-> bronze
     DAG -. "triggers" .-> silver
     DAG -. "triggers" .-> gold
@@ -78,121 +74,155 @@ flowchart TB
 
 ---
 
-## What Happens at Each Layer
+## ⚙️ What Happens at Each Layer
 
-### Bronze — Raw Ingestion
-**Script:** `src/ingestion/bronze_ingest.py` · **Engine:** Polars
+### 1. Ingestion — Google Colab Streaming Simulator
+A multi-threaded Python script running in Google Colab that pulls existing CSV files from a connected Google Drive folder and uploads them in parallel to the **Azure Data Lake Landing Zone**, simulating a streaming ingestion source without paid API access.
 
-- Scans the landing zone for new CSV files
-- Computes a SHA-256 hash of each file (this hash becomes the **lineage key** that tracks the file across every layer)
-- Streams the CSV into a compressed Parquet file using Polars' `sink_parquet` (avoids loading the entire file into RAM)
-- Moves the original CSV to the archive zone after successful conversion
-- Logs the result (success/failure, row count, file size) to Azure PostgreSQL via the `LineageTracker`
+### 2. Bronze — Raw Ingestion to Parquet
+**Engine:** Polars
+- Airflow scans the Azure landing zone for new CSV files.
+- Computes a SHA-256 hash of each file (this hash becomes the **lineage key** that tracks the file across every layer).
+- Streams the CSV into a compressed Parquet file directly in Azure using Polars' `sink_parquet` (avoiding memory bottlenecks).
+- Logs the result to the Azure PostgreSQL `LineageTracker`.
 
-### Silver — Cleansing & Standardization
-**Script:** `src/transformation/silver_transform.py` · **Engine:** DuckDB
+### 3. Silver — Cleansing & Standardization
+**Engine:** DuckDB
+- Queries Azure Postgres to find which Bronze files have been processed but not yet cleaned.
+- DuckDB connects directly to Azure Blob (`abfs://`) and runs a highly optimized `COPY` statement to apply transformations:
+  - **Type casting** (safely converting strings to integers/doubles/dates).
+  - **Geo-fencing** (validating latitude/longitude bounds).
+  - **Price capping** and **Unit normalization**.
+- Writes the cleaned output to the Silver container in Azure as a new Parquet file.
 
-- Queries the database to find which Bronze files have been processed but not yet cleaned
-- For each eligible file, runs a single DuckDB `COPY` statement that applies all transformations in one pass:
-  - **Type casting** — `TRY_CAST` safely converts strings to integers, doubles, dates (bad data becomes `NULL` instead of crashing)
-  - **Date parsing** — Uses `try_strptime` with multiple format patterns (`%B %d, %Y`, `%m-%d-%Y`, `%m/%d/%Y`) to handle inconsistent source formats
-  - **Unit normalization** — Converts Kanal to Marla (1 Kanal = 20 Marla), the standard Pakistani land unit
-  - **Geo-fencing** — Validates latitude/longitude fall within Pakistan's geographic bounds (24°N–37°N, 61°E–78°E)
-  - **Price capping** — Caps outlier prices at 500M PKR
-  - **Derived metrics** — Calculates `price_per_marla` for standardized price comparison
-  - **Default filling** — Replaces blank agency/agent fields with `'Direct Listing'` / `'Not Specified'`
-- Writes the cleaned output to `data/silver/` as a new Parquet file
-- Logs the result to Azure PostgreSQL
-
-### Gold — Historical Tracking (SCD Type 2)
-**Script:** `src/loading/gold_publish.py` · **Engine:** DuckDB + PyIceberg
-
-- Queries the database to find which Silver files have not yet been processed into Gold
-- Sorts files chronologically and processes them **one at a time** (this is critical — processing files out of order would corrupt the price history)
-- For each file, separates data into **Sales** (`propintel.gold_sales`) and **Rentals** (`propintel.gold_rentals`)
-- Loads the existing Iceberg table into DuckDB memory and runs an SCD Type 2 merge:
-  - If a property's price **has not changed** → the existing record is kept as-is
-  - If a property's price **has changed** → the old record is expired (`is_current = FALSE`, `valid_to = today`) and a new record is inserted (`is_current = TRUE`, `valid_from = today`)
-  - If a property is **brand new** → a new record is inserted
-- Overwrites the Iceberg table atomically using PyArrow (ACID-compliant snapshot)
-- Tables are partitioned by `city` for query performance
-- Logs the result to Azure PostgreSQL
+### 4. Gold — Historical Tracking (SCD Type 2 Lakehouse)
+**Engine:** DuckDB + PyIceberg
+- Airflow triggers the Gold layer to process Silver files sequentially.
+- Separates data into **Sales** (`propintel.gold_sales`) and **Rentals** (`propintel.gold_rentals`).
+- Loads the existing Iceberg table metadata from Azure Postgres.
+- DuckDB pulls the incoming data and the existing Iceberg data into memory and executes a highly optimized SQL **Window Function** to calculate the entire **SCD Type 2 Timeline** (tracking exact price changes across time with `is_current`, `valid_from`, and `valid_to` flags).
+- Overwrites the PyIceberg table atomically, creating a new time-travel snapshot.
 
 ---
 
-## State Management
+## 🔒 Idempotency & State Management
 
 All pipeline state lives in a single **Azure PostgreSQL** instance, which serves two distinct purposes:
 
 | Table | Managed By | Purpose |
 |-------|-----------|---------|
 | `file_lineage` | Our Python code (`LineageTracker`) | Tracks every file across every layer — hash, status, row count, error messages, retry count, Airflow run ID |
-| `iceberg_tables` / `iceberg_namespace_properties` | PyIceberg (automatic) | Stores Iceberg table metadata — schema definitions, partition specs, pointers to physical data files |
+| `iceberg_tables` | PyIceberg (automatic) | Stores Iceberg table metadata — schema definitions, partition specs, pointers to physical data files |
 
-The `LineageTracker` uses a **RAM-buffered bulk-flush** pattern: it pre-loads all known hashes into a Python `set()` at startup, processes files locally, and writes results to the database in a single `executemany` batch at the end — reducing network round-trips to Azure by orders of magnitude.
+The `LineageTracker` uses a **RAM-buffered bulk-flush** pattern: it pre-loads all known hashes into a Python `set()` at startup, processes files, and writes results to the database in a single `executemany` batch at the end — reducing network round-trips to Azure by orders of magnitude. This makes the pipeline **perfectly idempotent**; if Airflow fails halfway, it automatically resumes exactly where it left off without duplicating data.
 
 ---
 
-## Project Structure
+## 📸 Pipeline Showcase & Proof of Execution
+
+### Azure Data Lake Architecture Tree
+Visual proof of the Medallion architecture deployed successfully across Azure Storage containers.
+![Azure Data Lake](src/utils/Pics_for_readme/PropiDataLakestructure.png)
+
+### Airflow Orchestration (DAG & Gantt)
+Proving seamless scheduling and parallel execution across 122+ files.
+![Airflow DAG](src/utils/Pics_for_readme/Pairflow_dag_EtL.png)
+![Airflow Gantt Chart](src/utils/Pics_for_readme/Propi_airflow_gant_chart.png)
+
+### Postgres Lineage Tracker (Idempotency)
+Direct query output from Azure PostgreSQL proving that Airflow is flawlessly tracking the success state of every single file.
+![Postgres Lineage](src/utils/Pics_for_readme/PLineage_tracker_airflow.png)
+
+### Gold Layer: Apache Iceberg & SCD Type 2
+Showcasing DuckDB perfectly tracking historical price changes over time in the Gold Iceberg tables.
+![SCD2 Dashboard](src/utils/Pics_for_readme/PropI_scd2_Iceberg.png)
+
+### Google Colab Multi-threaded Ingestion
+Uploading existing CSV files from Google Drive directly to Azure Storage Gen2 in parallel, simulating a streaming data source.
+![Colab API Upload](src/utils/Pics_for_readme/Pcollab_api.png)
+![Colab to Azure Upload](src/utils/Pics_for_readme/P.streaming_from_google_drive_to_blob_VIa_collab.png)
+
+### Interactive Rollback System
+Custom CLI tool for nuclear resets and data rollback.
+![Rollback Tool](src/utils/Pics_for_readme/Pipeline_rollback.png)
+
+### Bronze Reset DAG (Safe Teardown)
+Airflow DAG for safely tearing down and rebuilding the Bronze layer without affecting Silver or Gold.
+![Bronze Reset DAG](src/utils/Pics_for_readme/p.Bronze_reset.png)
+
+### Azure Portal — Provisioned Cloud Resources
+The actual Azure resource group showing the provisioned VM, Storage Account, PostgreSQL server, and networking.
+![Azure Resources](src/utils/Pics_for_readme/PropI_cloud_resources.png)
+
+
+---
+
+## 📁 Project Structure
 
 ```
 PropI/
 ├── dags/
-│   └── propintel_daily_etl.py           # Airflow DAG — orchestrates Bronze → Silver → Gold
+│   ├── propintel_daily_etl.py              # Airflow DAG — orchestrates Bronze → Silver → Gold
+│   ├── propintel_reset_bronze_dag.py       # Safe Bronze teardown DAG
+│   ├── propintel_reset_silver_dag.py       # Safe Silver teardown DAG
+│   └── propintel_reset_gold_dag.py         # Safe Gold teardown DAG
 │
 ├── src/
 │   ├── ingestion/
-│   │   └── bronze_ingest.py             # Landing → Bronze (Polars streaming)
+│   │   └── bronze_ingest.py                # Landing → Bronze (Polars streaming)
 │   ├── transformation/
-│   │   └── silver_transform.py          # Bronze → Silver (DuckDB SQL)
+│   │   └── silver_transform.py             # Bronze → Silver (DuckDB SQL)
 │   ├── loading/
-│   │   └── gold_publish.py              # Silver → Gold (DuckDB + Iceberg SCD2)
+│   │   └── gold_publish.py                 # Silver → Gold (DuckDB + Iceberg SCD2)
 │   ├── helper_files/
-│   │   ├── database.py                  # psycopg2 connection pool + context manager
-│   │   ├── lineage.py                   # RAM-buffered bulk-flush LineageTracker
-│   │   └── iceberg_catalog.py           # PyIceberg SQL Catalog + schema definitions
+│   │   ├── cloud_utils.py                  # Azure Blob Storage helper functions
+│   │   ├── database.py                     # psycopg2 connection pool + context manager
+│   │   ├── lineage.py                      # RAM-buffered bulk-flush LineageTracker
+│   │   └── iceberg_catalog.py              # PyIceberg SQL Catalog + schema definitions
+│   ├── analysis/
+│   │   └── explore_silver.py               # Silver layer EDA / exploration
 │   └── utils/
-│       ├── dev_hard_reset.py            # Interactive CLI to rollback specific layers
-│       ├── testing_gold_iceberg.py      # Gold layer validation script
-│       ├── init_db.py                   # Database initialization utility
-│       └── test_db.py                   # Database connection test
+│       ├── dev_hard_reset.py               # Interactive CLI to rollback specific layers
+│       ├── testing_gold_iceberg.py          # Gold layer validation script
+│       ├── reset_bronze.py                 # Bronze reset utility
+│       ├── reset_silver.py                 # Silver reset utility
+│       ├── reset_gold.py                   # Gold reset utility
+│       ├── init_db.py                      # Database initialization utility
+│       └── test_db.py                      # Database connection test
 │
-├── data/                                # Local data lake (gitignored)
-│   ├── landing_zone/                    # Raw CSVs dropped here
-│   ├── bronze/                          # Parquet files (1:1 from CSV)
-│   ├── silver/                          # Cleaned Parquet files
-│   ├── gold/warehouse/                  # Iceberg table data
-│   └── archive_zone/                    # Processed CSVs (post-Bronze)
+├── data/                                    # Azure Data Lake (gitignored)
+│   └── bronze/                             # Local cache / sync artifacts
 │
-├── schema.sql                           # PostgreSQL schema (v2) — run on Azure
-├── docker-compose.yml                   # Airflow infrastructure (4 services)
-├── Dockerfile                           # Custom Airflow image with pipeline deps
-├── requirements.txt                     # Python dependencies
-├── .env.example                         # Environment variable template
-├── problems_solved.md                   # Personal engineering decisions log
-└── cloud_deployment.md                  # Azure cloud migration plan
+├── schema.sql                               # PostgreSQL schema (v2) — run on Azure
+├── docker-compose.yml                       # Airflow infrastructure (4 services)
+├── Dockerfile                               # Custom Airflow image with pipeline deps
+├── requirements.txt                         # Python dependencies
+├── .env.example                             # Environment variable template
+└── problems_solved.md                       # Personal engineering decisions log
 ```
 
 ---
 
-## Infrastructure
+## 🧰 Tech Stack
 
-Airflow runs locally via Docker Compose with 4 services:
-
-| Service | Role |
-|---------|------|
-| `airflow-postgres` | Airflow's own internal metadata database (separate from Azure PostgreSQL) |
-| `airflow-init` | One-time bootstrap — runs `airflow db migrate` and creates the admin user |
-| `airflow-webserver` | The Airflow UI at `http://localhost:8080` |
-| `airflow-scheduler` | Background process that reads DAGs and triggers tasks on schedule |
-
-The `Dockerfile` builds a custom image on top of `apache/airflow:2.10.4`, installing `libpq-dev` (for PostgreSQL drivers) and all Python packages from `requirements.txt`. Your source code and data directories are mounted as Docker volumes — changes you make on your machine are instantly visible inside the container.
+| Tool | Version | Role |
+|------|---------|------|
+| **Python** | 3.11 | Pipeline scripting |
+| **Polars** | Latest | High-speed streaming CSV → Parquet (Bronze) |
+| **DuckDB** | Latest | In-memory vectorized SQL engine (Silver + Gold) |
+| **Apache Iceberg** | via PyIceberg | Open table format with ACID transactions and time-travel (Gold) |
+| **PyArrow** | Latest | Columnar memory format for Iceberg read/write |
+| **Apache Airflow** | 2.10.4 | DAG-based workflow orchestration and scheduling |
+| **PostgreSQL** | Azure Flexible Server | File lineage tracking + Iceberg SQL Catalog |
+| **Docker** | Compose v2 | Containerized Airflow deployment |
+| **Azure Blob Storage** | Gen2 | Cloud data lake for all Medallion layers |
+| **Google Colab** | — | Multi-threaded CSV upload simulator |
 
 ---
 
-## Getting Started
+## 🚀 Getting Started
 
-**Prerequisites:** Python 3.11+, Docker & Docker Compose, an Azure PostgreSQL instance (or any PostgreSQL server)
+**Prerequisites:** Python 3.11+, Docker & Docker Compose, an Azure PostgreSQL instance, an Azure Storage Account
 
 ```bash
 # 1. Clone the repository
@@ -201,13 +231,13 @@ cd Property-Intelligence-Platform
 
 # 2. Configure credentials
 cp .env.example .env
-# Fill in your Azure PostgreSQL host, user, password, and local data paths
+# Fill in your Azure PostgreSQL host, user, password, and Azure Storage keys
 
 # 3. Initialize the database
 # Copy schema.sql contents into your Azure PostgreSQL SQL editor and execute
 
-# 4. Place raw CSV files
-# Drop your Kaggle CSV files into the data/landing_zone/ directory
+# 4. Upload raw CSV files to Azure
+# Use the Google Colab notebook to stream CSVs from Google Drive to Azure Blob landing zone
 
 # 5a. Run via Airflow (recommended)
 docker-compose up --build -d
@@ -228,24 +258,9 @@ python src/utils/dev_hard_reset.py
 
 ---
 
-## Tech Stack
+## ✅ Status
 
-| Tool | Version | Role |
-|------|---------|------|
-| **Python** | 3.11 | Pipeline scripting |
-| **Polars** | Latest | High-speed streaming CSV → Parquet (Bronze) |
-| **DuckDB** | Latest | In-memory vectorized SQL engine (Silver + Gold) |
-| **Apache Iceberg** | via PyIceberg | Open table format with ACID transactions and time-travel (Gold) |
-| **PyArrow** | Latest | Columnar memory format for Iceberg read/write |
-| **Apache Airflow** | 2.10.4 | DAG-based workflow orchestration and scheduling |
-| **PostgreSQL** | Azure Flexible Server | File lineage tracking + Iceberg SQL Catalog |
-| **Docker** | Compose v2 | Containerized Airflow deployment |
-| **psycopg2** | Latest | PostgreSQL driver with connection pooling |
-
----
-
-## Status
-
+- [x] Google Colab → Azure Blob multi-threaded upload
 - [x] Landing → Bronze ETL (Polars streaming ingestion)
 - [x] Bronze → Silver ETL (DuckDB transformations)
 - [x] Silver → Gold ETL (Iceberg SCD Type 2 merge)
@@ -253,5 +268,6 @@ python src/utils/dev_hard_reset.py
 - [x] Airflow DAG orchestration (Dockerized)
 - [x] Database schema v2 (optimized for bulk upsert)
 - [x] Interactive layer rollback tool (`dev_hard_reset.py`)
-- [ ] Gold layer validation and testing
-- [ ] Cloud migration — Azure Blob Storage + Azure VM compute
+- [x] Gold layer validation and testing
+- [x] Cloud migration — Azure Blob Storage + Azure PostgreSQL
+- [ ] Scheduled automated re-ingestion (cron-based Colab trigger)

@@ -260,7 +260,7 @@ def process_table_bulk(catalog, file_list, purpose_filter, iceberg_table_name, a
             WITH all_silver AS (
                 SELECT 
                     *,
-                    regexp_extract(filename, '(\d{{4}}-\d{{2}}-\d{{2}})')::DATE AS scrape_date,
+                    regexp_extract(filename, '(\\d{{4}}-\\d{{2}}-\\d{{2}})')::DATE AS scrape_date,
                     CASE WHEN bedrooms = 0 THEN 'Plot/Land' ELSE property_type END AS property_category,
                     CASE WHEN price < {anomaly_threshold} THEN TRUE ELSE FALSE END AS is_anomaly,
                     '{current_utc}' AS _gold_loaded_at
