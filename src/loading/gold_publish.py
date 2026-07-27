@@ -237,102 +237,109 @@ def process_table_bulk(catalog, file_list, purpose_filter, iceberg_table_name, a
     table = catalog.load_table(iceberg_table_name)
     current_utc = datetime.now(timezone.utc).isoformat()
     
-    anomaly_threshold = 100000 if purpose_filter == 'For Sale' else 1000
-    
     # ---------------------------------------------------------
-    # BULK SCD TYPE 2 LOGIC (WINDOW FUNCTIONS)
+    # PARTITIONED BULK SCD TYPE 2 LOGIC (WINDOW FUNCTIONS)
     # ---------------------------------------------------------
-    # Step 1: Read ALL silver files at once, apply gold transformations
-    # Step 2: Use LAG(price) to detect price changes across days
-    # Step 3: Keep only rows where a price change occurred (or first appearance)
-    # Step 4: Use LEAD(date_added) to calculate valid_to for each version
-    # Step 5: The last version of each property gets is_current = TRUE
     
-    bulk_scd2_query = f"""
-        WITH all_silver AS (
-            SELECT 
-                *,
-                regexp_extract(filename, '(\d{{4}}-\d{{2}}-\d{{2}})')::DATE AS scrape_date,
-                CASE WHEN bedrooms = 0 THEN 'Plot/Land' ELSE property_type END AS property_category,
-                CASE WHEN price < {anomaly_threshold} THEN TRUE ELSE FALSE END AS is_anomaly,
-                '{current_utc}' AS _gold_loaded_at
-            FROM read_parquet({files_sql}, filename=true)
-            WHERE purpose = '{purpose_filter}'
-        ),
-        -- Deduplicate: if a property appears multiple times on the same day, keep one
-        deduped AS (
-            SELECT *, 
-                   ROW_NUMBER() OVER (PARTITION BY property_id, scrape_date ORDER BY scrape_date) as rn
-            FROM all_silver
-        ),
-        unique_rows AS (
-            SELECT * EXCLUDE (rn, filename) FROM deduped WHERE rn = 1
-        ),
-        -- Detect price changes using LAG window function across the scraper timeline
-        with_prev_price AS (
-            SELECT *,
-                   LAG(price) OVER (PARTITION BY property_id ORDER BY scrape_date) as prev_price
-            FROM unique_rows
-        ),
-        -- Keep only first appearances and rows where price actually changed
-        price_changes AS (
-            SELECT * EXCLUDE (prev_price) 
-            FROM with_prev_price
-            WHERE prev_price IS NULL OR price != prev_price
-        ),
-        -- Build the SCD2 timeline using LEAD to calculate valid_to
-        -- EXPLICIT CASTs ensure DuckDB output types match the Iceberg schema exactly
-        scd2_timeline AS (
-            SELECT 
-                CAST(property_id AS BIGINT) AS property_id,
-                CAST(location_id AS INTEGER) AS location_id,
-                CAST(page_url AS VARCHAR) AS page_url,
-                CAST(url_hash AS VARCHAR) AS url_hash,
-                CAST(property_type AS VARCHAR) AS property_type,
-                CAST(property_category AS VARCHAR) AS property_category,
-                CAST(price AS BIGINT) AS price,
-                CAST(price_per_marla AS DOUBLE) AS price_per_marla,
-                CAST(is_anomaly AS BOOLEAN) AS is_anomaly,
-                CAST(location AS VARCHAR) AS location,
-                CAST(city AS VARCHAR) AS city,
-                CAST(province_name AS VARCHAR) AS province_name,
-                CAST(latitude AS DOUBLE) AS latitude,
-                CAST(longitude AS DOUBLE) AS longitude,
-                CAST(baths AS INTEGER) AS baths,
-                CAST(bedrooms AS INTEGER) AS bedrooms,
-                CAST(agency AS VARCHAR) AS agency,
-                CAST(agent AS VARCHAR) AS agent,
-                CAST(area_marla AS DOUBLE) AS area_marla,
-                CAST(date_added AS DATE) AS date_added,
-                -- The last version of each property (no LEAD match) is the current active one
-                CASE 
-                    WHEN LEAD(scrape_date) OVER (PARTITION BY property_id ORDER BY scrape_date) IS NULL 
-                    THEN TRUE ELSE FALSE 
-                END AS is_current,
-                -- valid_from = the date this version first appeared
-                CAST(scrape_date AS DATE) AS valid_from,
-                -- valid_to = the date the NEXT version appeared (NULL if current)
-                CAST(LEAD(scrape_date) OVER (PARTITION BY property_id ORDER BY scrape_date) AS DATE) AS valid_to,
-                CAST(_ingested_at AS VARCHAR) AS _ingested_at,
-                CAST(_bronze_airflow_run_id AS VARCHAR) AS _bronze_airflow_run_id,
-                CAST(_transformed_at AS VARCHAR) AS _transformed_at,
-                CAST(_silver_airflow_run_id AS VARCHAR) AS _silver_airflow_run_id,
-                CAST(_gold_loaded_at AS VARCHAR) AS _gold_loaded_at
-            FROM price_changes
-        )
-        SELECT * FROM scd2_timeline
-    """
+    # 1. Fetch Distinct Cities to partition the memory load
+    distinct_cities_query = f"SELECT DISTINCT city FROM read_parquet({files_sql}) WHERE purpose = '{purpose_filter}' AND city IS NOT NULL"
+    distinct_cities = con.execute(distinct_cities_query).fetchall()
+    cities = [row[0] for row in distinct_cities if row[0]]
     
-    final_arrow_table = con.execute(bulk_scd2_query).fetch_arrow_table()
+    total_rows = 0
+    first_chunk = True
     
-    if len(final_arrow_table) > 0:
-        table.overwrite(final_arrow_table)
-        logger.info(f"[BULK] Successfully wrote {iceberg_table_name} with {len(final_arrow_table)} total rows.")
-    else:
+    for city in cities:
+        escaped_city = city.replace("'", "''")
+        logger.info(f"[BULK] Processing SCD2 timeline for city: {city}...")
+        
+        # Inject the city partition into the CTE
+        bulk_scd2_query = f"""
+            WITH all_silver AS (
+                SELECT 
+                    *,
+                    regexp_extract(filename, '(\d{{4}}-\d{{2}}-\d{{2}})')::DATE AS scrape_date,
+                    CASE WHEN bedrooms = 0 THEN 'Plot/Land' ELSE property_type END AS property_category,
+                    CASE WHEN price < {anomaly_threshold} THEN TRUE ELSE FALSE END AS is_anomaly,
+                    '{current_utc}' AS _gold_loaded_at
+                FROM read_parquet({files_sql}, filename=true)
+                WHERE purpose = '{purpose_filter}' AND city = '{escaped_city}'
+            ),
+            deduped AS (
+                SELECT *, 
+                       ROW_NUMBER() OVER (PARTITION BY property_id, scrape_date ORDER BY scrape_date) as rn
+                FROM all_silver
+            ),
+            unique_rows AS (
+                SELECT * EXCLUDE (rn, filename) FROM deduped WHERE rn = 1
+            ),
+            with_prev_price AS (
+                SELECT *,
+                       LAG(price) OVER (PARTITION BY property_id ORDER BY scrape_date) as prev_price
+                FROM unique_rows
+            ),
+            price_changes AS (
+                SELECT * EXCLUDE (prev_price) 
+                FROM with_prev_price
+                WHERE prev_price IS NULL OR price != prev_price
+            ),
+            scd2_timeline AS (
+                SELECT 
+                    CAST(property_id AS BIGINT) AS property_id,
+                    CAST(location_id AS INTEGER) AS location_id,
+                    CAST(page_url AS VARCHAR) AS page_url,
+                    CAST(url_hash AS VARCHAR) AS url_hash,
+                    CAST(property_type AS VARCHAR) AS property_type,
+                    CAST(property_category AS VARCHAR) AS property_category,
+                    CAST(price AS BIGINT) AS price,
+                    CAST(price_per_marla AS DOUBLE) AS price_per_marla,
+                    CAST(is_anomaly AS BOOLEAN) AS is_anomaly,
+                    CAST(location AS VARCHAR) AS location,
+                    CAST(city AS VARCHAR) AS city,
+                    CAST(province_name AS VARCHAR) AS province_name,
+                    CAST(latitude AS DOUBLE) AS latitude,
+                    CAST(longitude AS DOUBLE) AS longitude,
+                    CAST(baths AS INTEGER) AS baths,
+                    CAST(bedrooms AS INTEGER) AS bedrooms,
+                    CAST(agency AS VARCHAR) AS agency,
+                    CAST(agent AS VARCHAR) AS agent,
+                    CAST(area_marla AS DOUBLE) AS area_marla,
+                    CAST(date_added AS DATE) AS date_added,
+                    CASE 
+                        WHEN LEAD(scrape_date) OVER (PARTITION BY property_id ORDER BY scrape_date) IS NULL 
+                        THEN TRUE ELSE FALSE 
+                    END AS is_current,
+                    CAST(scrape_date AS DATE) AS valid_from,
+                    CAST(LEAD(scrape_date) OVER (PARTITION BY property_id ORDER BY scrape_date) AS DATE) AS valid_to,
+                    CAST(_ingested_at AS VARCHAR) AS _ingested_at,
+                    CAST(_bronze_airflow_run_id AS VARCHAR) AS _bronze_airflow_run_id,
+                    CAST(_transformed_at AS VARCHAR) AS _transformed_at,
+                    CAST(_silver_airflow_run_id AS VARCHAR) AS _silver_airflow_run_id,
+                    CAST(_gold_loaded_at AS VARCHAR) AS _gold_loaded_at
+                FROM price_changes
+            )
+            SELECT * FROM scd2_timeline
+        """
+        
+        city_arrow = con.execute(bulk_scd2_query).fetch_arrow_table()
+        
+        if len(city_arrow) > 0:
+            if first_chunk:
+                table.overwrite(city_arrow)
+                first_chunk = False
+            else:
+                table.append(city_arrow)
+            
+            total_rows += len(city_arrow)
+            logger.info(f"[BULK]   -> Wrote {len(city_arrow)} SCD2 rows for {city}")
+
+    if total_rows == 0:
         logger.info(f"[BULK] No data to write for {iceberg_table_name}.")
-    
+    else:
+        logger.info(f"[BULK] Successfully wrote {iceberg_table_name} with {total_rows} total rows.")
+        
     con.close()
-    return len(final_arrow_table)
+    return total_rows
 
 
 # =============================================================
@@ -410,7 +417,7 @@ def publish_to_gold(airflow_run_id: str = None):
         # DAILY MODE: Gold has data OR we have just 1 day     -> Incremental SCD2 merge
         # ---------------------------------------------------------
         
-        use_bulk = (not gold_has_data) and (len(unique_dates) > 1)
+        use_bulk = (not gold_has_data)
         
         if use_bulk:
             # ===================== BULK BACKFILL =====================
