@@ -20,7 +20,7 @@ The pipeline begins with a multi-threaded **Google Colab** script that pulls exi
 
 > The diagram below is written in [Mermaid.js](https://mermaid.js.org/)
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph source ["🚀 Google Colab (Ingestion)"]
         COLAB["🐍 Python Multi-threaded Uploader<br/><i>Google Drive to Azure Blob Upload</i>"]
     end
