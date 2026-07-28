@@ -29,29 +29,28 @@ flowchart TB
         DAG["propintel_daily_etl.py<br/>Bronze → Silver → Gold"]
     end
 
+    subgraph compute ["⚙️ Compute Engines (Azure VM)"]
+        B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
+        S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
+        G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
+    end
+
     subgraph cloud_storage ["☁️ Azure Data Lake Storage Gen2"]
         subgraph landing ["Landing Zone"]
             B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
         end
 
         subgraph bronze ["Bronze Layer"]
-            B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
             B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
         end
 
         subgraph silver ["Silver Layer"]
-            S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
             S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
         end
 
         subgraph gold ["Gold Layer"]
-            G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
-            G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
+            G_OUT["Apache Iceberg Warehouse<br/><code>gold/warehouse/propintel/</code>"]
         end
-        
-        B_IN --> B_ENGINE --> B_OUT
-        B_OUT --> S_ENGINE --> S_OUT
-        S_OUT --> G_ENGINE --> G_OUT
     end
 
     subgraph cloud_db ["☁️ Azure PostgreSQL Flexible Server"]
@@ -59,12 +58,21 @@ flowchart TB
         CATALOG[("iceberg_tables<br/>(PyIceberg SQL Catalog)")]
     end
 
+    %% Ingestion
     source --> B_IN
-    
-    %% Airflow triggers mapping directly to the compute engines
+
+    %% Airflow Triggers
     DAG -. "triggers" .-> B_ENGINE
     DAG -. "triggers" .-> S_ENGINE
     DAG -. "triggers" .-> G_ENGINE
+
+    %% ETL Weaving (Storage <--> Compute)
+    B_IN --> B_ENGINE
+    B_ENGINE --> B_OUT
+    B_OUT --> S_ENGINE
+    S_ENGINE --> S_OUT
+    S_OUT --> G_ENGINE
+    G_ENGINE --> G_OUT
 
     %% Logging interactions mapping perfectly to the DB
     B_ENGINE -. "logs status" .-> LINEAGE
@@ -75,10 +83,9 @@ flowchart TB
     %% Styling Subgraphs for Visual Separation and Cohesion
     style source fill:#fff3e0,stroke:#e65100,stroke-width:2px
     style airflow fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    style cloud_db fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
-    
-    %% Big dotted line boundary for the Data Lake container
+    style compute fill:#e3f2fd,stroke:#0277bd,stroke-width:2px,stroke-dasharray: 5 5
     style cloud_storage fill:none,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
+    style cloud_db fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
     
     %% Individual Data Lake containers
     style landing fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
