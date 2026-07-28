@@ -20,7 +20,7 @@ The pipeline begins with a multi-threaded **Google Colab** script that pulls exi
 
 > The diagram below is written in [Mermaid.js](https://mermaid.js.org/)
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph source ["🚀 Google Colab (Ingestion)"]
         COLAB["🐍 Python Multi-threaded Uploader<br/><i>Google Drive to Azure Blob Upload</i>"]
     end
@@ -29,24 +29,29 @@ flowchart TB
         DAG["propintel_daily_etl.py<br/>Bronze → Silver → Gold"]
     end
 
-    subgraph compute ["⚙️ Compute Engines (Azure VM)"]
-        direction LR
-        B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
-        S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
-        G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
-    end
-
     subgraph cloud_storage ["☁️ Azure Data Lake Storage Gen2"]
-        direction LR
-        B_IN["Raw CSVs<br/><code>landingzone/*.csv</code>"]
-        B_OUT["Parquet Files<br/><code>bronze/*.parquet</code>"]
-        S_OUT["Cleaned Parquet<br/><code>silver/*_clean.parquet</code>"]
-        G_OUT["Apache Iceberg Warehouse<br/><code>gold/warehouse/propintel/</code>"]
+        subgraph landing ["Landing Zone"]
+            B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
+        end
+
+        subgraph bronze ["Bronze Layer"]
+            B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
+            B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
+        end
+
+        subgraph silver ["Silver Layer"]
+            S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
+            S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
+        end
+
+        subgraph gold ["Gold Layer"]
+            G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
+            G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
+        end
         
-        %% Data Flow strictly inside the Data Lake
-        B_IN ==>|"Processed"| B_OUT
-        B_OUT ==>|"Cleaned"| S_OUT
-        S_OUT ==>|"Merged"| G_OUT
+        B_IN --> B_ENGINE --> B_OUT
+        B_OUT --> S_ENGINE --> S_OUT
+        S_OUT --> G_ENGINE --> G_OUT
     end
 
     subgraph cloud_db ["☁️ Azure PostgreSQL Flexible Server"]
@@ -55,29 +60,31 @@ flowchart TB
     end
 
     source --> B_IN
-
-    %% Airflow triggers Compute
+    
+    %% Airflow triggers mapping directly to the compute engines
     DAG -. "triggers" .-> B_ENGINE
     DAG -. "triggers" .-> S_ENGINE
     DAG -. "triggers" .-> G_ENGINE
 
-    %% Compute points towards Datalake to avoid crossing lines
-    B_ENGINE -. "writes to" .-> B_OUT
-    S_ENGINE -. "writes to" .-> S_OUT
-    G_ENGINE -. "writes to" .-> G_OUT
+    %% Logging interactions mapping perfectly to the DB
+    B_ENGINE -. "logs status" .-> LINEAGE
+    S_ENGINE -. "logs status" .-> LINEAGE
+    G_ENGINE -. "logs status" .-> LINEAGE
+    G_ENGINE <-. "reads/writes<br/>table metadata" .-> CATALOG
 
-    %% State Management & Logging
-    B_ENGINE -. "logs" .-> LINEAGE
-    S_ENGINE -. "logs" .-> LINEAGE
-    G_ENGINE -. "logs" .-> LINEAGE
-    G_ENGINE <-. "metadata" .-> CATALOG
-
-    %% Styling for Visual Cohesion
+    %% Styling Subgraphs for Visual Separation and Cohesion
     style source fill:#fff3e0,stroke:#e65100,stroke-width:2px
     style airflow fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    style compute fill:#e3f2fd,stroke:#0277bd,stroke-width:2px,stroke-dasharray: 5 5
-    style cloud_storage fill:#e8eaf6,stroke:#3f51b5,stroke-width:2px,stroke-dasharray: 5 5
     style cloud_db fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    
+    %% Big dotted line boundary for the Data Lake container
+    style cloud_storage fill:none,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
+    
+    %% Individual Data Lake containers
+    style landing fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
+    style bronze fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
+    style silver fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
+    style gold fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
 ```
 
 ---
