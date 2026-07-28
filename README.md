@@ -30,18 +30,23 @@ flowchart TB
     end
 
     subgraph compute ["⚙️ Compute Engines (Azure VM)"]
-        direction TB
+        direction LR
         B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
         S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
         G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
     end
 
     subgraph cloud_storage ["☁️ Azure Data Lake Storage Gen2"]
-        direction TB
+        direction LR
         B_IN["Raw CSVs<br/><code>landingzone/*.csv</code>"]
         B_OUT["Parquet Files<br/><code>bronze/*.parquet</code>"]
         S_OUT["Cleaned Parquet<br/><code>silver/*_clean.parquet</code>"]
         G_OUT["Apache Iceberg Warehouse<br/><code>gold/warehouse/propintel/</code>"]
+        
+        %% Data Flow strictly inside the Data Lake
+        B_IN ==>|"Processed"| B_OUT
+        B_OUT ==>|"Cleaned"| S_OUT
+        S_OUT ==>|"Merged"| G_OUT
     end
 
     subgraph cloud_db ["☁️ Azure PostgreSQL Flexible Server"]
@@ -56,15 +61,10 @@ flowchart TB
     DAG -. "triggers" .-> S_ENGINE
     DAG -. "triggers" .-> G_ENGINE
 
-    %% Data Flow (Storage <--> Compute)
-    B_IN --> B_ENGINE
-    B_ENGINE --> B_OUT
-
-    B_OUT --> S_ENGINE
-    S_ENGINE --> S_OUT
-
-    S_OUT --> G_ENGINE
-    G_ENGINE --> G_OUT
+    %% Compute points towards Datalake to avoid crossing lines
+    B_ENGINE -. "writes to" .-> B_OUT
+    S_ENGINE -. "writes to" .-> S_OUT
+    G_ENGINE -. "writes to" .-> G_OUT
 
     %% State Management & Logging
     B_ENGINE -. "logs" .-> LINEAGE
