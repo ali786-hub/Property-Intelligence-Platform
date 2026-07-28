@@ -31,21 +31,25 @@ flowchart TB
         DAG["propintel_daily_etl.py<br/>Bronze → Silver → Gold"]
     end
 
-    subgraph cloud_storage ["☁️ Azure Data Lake Storage Gen2"]
-        direction TB
-        B_IN["Raw CSVs (Landing Zone)<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
-        
-        B_ENGINE["Polars (Bronze Ingestion)<br/><i>Streaming sink_parquet</i>"]
-        B_OUT["Parquet Files (Bronze Layer)<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
-        
-        S_ENGINE["DuckDB (Silver Transformation)<br/><i>SQL Transforms & Standardization</i>"]
-        S_OUT["Cleaned Parquet (Silver Layer)<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
-        
-        G_ENGINE["DuckDB + PyArrow (Gold Loading)<br/><i>SCD Type 2 Timeline Merge</i>"]
-        G_OUT["Apache Iceberg Warehouse (Gold Layer)<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
+    subgraph landing ["☁️ Azure Data Lake: Landing Zone"]
+        B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
+    end
 
+    subgraph bronze ["☁️ Azure Data Lake: Bronze Layer"]
+        B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
+        B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
         B_IN --> B_ENGINE --> B_OUT
+    end
+
+    subgraph silver ["☁️ Azure Data Lake: Silver Layer"]
+        S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
+        S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
         B_OUT --> S_ENGINE --> S_OUT
+    end
+
+    subgraph gold ["☁️ Azure Data Lake: Gold Layer"]
+        G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
+        G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
         S_OUT --> G_ENGINE --> G_OUT
     end
 
@@ -66,6 +70,16 @@ flowchart TB
     S_ENGINE -. "logs status" .-> LINEAGE
     G_ENGINE -. "logs status" .-> LINEAGE
     G_ENGINE <-. "reads/writes<br/>table metadata" .-> CATALOG
+
+    %% Styling Subgraphs for Visual Separation and Cohesion
+    style source fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style airflow fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style cloud_db fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    
+    style landing fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
+    style bronze fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
+    style silver fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
+    style gold fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
 ```
 
 ---
