@@ -49,8 +49,13 @@ flowchart TB
         end
 
         subgraph gold ["Gold Layer"]
-            G_OUT["Apache Iceberg Warehouse<br/><code>gold/warehouse/propintel/</code>"]
+            G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
         end
+        
+        %% Data Flow strictly inside the Data Lake
+        B_IN ==>|"Processed"| B_OUT
+        B_OUT ==>|"Cleaned"| S_OUT
+        S_OUT ==>|"Merged"| G_OUT
     end
 
     subgraph cloud_db ["☁️ Azure PostgreSQL Flexible Server"]
@@ -59,35 +64,31 @@ flowchart TB
     end
 
     %% Ingestion
-    source --> B_IN
+    COLAB --> B_IN
 
     %% Airflow Triggers
     DAG -. "triggers" .-> B_ENGINE
     DAG -. "triggers" .-> S_ENGINE
     DAG -. "triggers" .-> G_ENGINE
 
-    %% ETL Weaving (Storage <--> Compute)
-    B_IN --> B_ENGINE
-    B_ENGINE --> B_OUT
-    B_OUT --> S_ENGINE
-    S_ENGINE --> S_OUT
-    S_OUT --> G_ENGINE
-    G_ENGINE --> G_OUT
+    %% Compute points towards Datalake to avoid cyclic dependencies
+    B_ENGINE -. "processes" .-> B_OUT
+    S_ENGINE -. "transforms" .-> S_OUT
+    G_ENGINE -. "merges" .-> G_OUT
 
-    %% Logging interactions mapping perfectly to the DB
+    %% Logging
     B_ENGINE -. "logs status" .-> LINEAGE
     S_ENGINE -. "logs status" .-> LINEAGE
     G_ENGINE -. "logs status" .-> LINEAGE
-    G_ENGINE <-. "reads/writes<br/>table metadata" .-> CATALOG
+    G_ENGINE -. "reads/writes<br/>metadata" .-> CATALOG
 
-    %% Styling Subgraphs for Visual Separation and Cohesion
+    %% Styling
     style source fill:#fff3e0,stroke:#e65100,stroke-width:2px
     style airflow fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
     style compute fill:#e3f2fd,stroke:#0277bd,stroke-width:2px,stroke-dasharray: 5 5
     style cloud_storage fill:none,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
     style cloud_db fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
     
-    %% Individual Data Lake containers
     style landing fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
     style bronze fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
     style silver fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
