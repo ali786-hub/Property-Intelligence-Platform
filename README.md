@@ -31,26 +31,30 @@ flowchart TB
         DAG["propintel_daily_etl.py<br/>Bronze → Silver → Gold"]
     end
 
-    subgraph landing ["☁️ Azure Data Lake: Landing Zone"]
-        B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
-    end
+    subgraph cloud_storage ["☁️ Azure Data Lake Storage Gen2"]
+        direction TB
 
-    subgraph bronze ["☁️ Azure Data Lake: Bronze Layer"]
-        B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
-        B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
-        B_IN --> B_ENGINE --> B_OUT
-    end
+        subgraph landing ["Landing Zone"]
+            B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
+        end
 
-    subgraph silver ["☁️ Azure Data Lake: Silver Layer"]
-        S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
-        S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
-        B_OUT --> S_ENGINE --> S_OUT
-    end
+        subgraph bronze ["Bronze Layer"]
+            B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
+            B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
+            B_IN --> B_ENGINE --> B_OUT
+        end
 
-    subgraph gold ["☁️ Azure Data Lake: Gold Layer"]
-        G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
-        G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
-        S_OUT --> G_ENGINE --> G_OUT
+        subgraph silver ["Silver Layer"]
+            S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
+            S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
+            B_OUT --> S_ENGINE --> S_OUT
+        end
+
+        subgraph gold ["Gold Layer"]
+            G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
+            G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
+            S_OUT --> G_ENGINE --> G_OUT
+        end
     end
 
     subgraph cloud_db ["☁️ Azure PostgreSQL Flexible Server"]
@@ -76,10 +80,14 @@ flowchart TB
     style airflow fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
     style cloud_db fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
     
-    style landing fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
-    style bronze fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
-    style silver fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
-    style gold fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
+    %% Big dotted line boundary for the Data Lake container
+    style cloud_storage fill:none,stroke:#0288d1,stroke-width:2px,stroke-dasharray: 5 5
+    
+    %% Individual Data Lake containers
+    style landing fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
+    style bronze fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
+    style silver fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
+    style gold fill:#f0f7ff,stroke:#0078d4,stroke-width:1px
 ```
 
 ---
