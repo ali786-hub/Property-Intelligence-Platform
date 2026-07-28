@@ -1,6 +1,6 @@
 # PropIntel — Cloud-Native Data Lakehouse
 
-A production-grade, fully cloud-native data engineering pipeline that processes real estate market data through a complete **Medallion Architecture** (Landing → Bronze → Silver → Gold) on **Azure Data Lake Storage Gen2**. 
+A fully cloud-native data engineering pipeline that processes real estate market data through a complete **Medallion Architecture** (Landing → Bronze → Silver → Gold) on **Azure Data Lake Storage Gen2**. 
 
 The pipeline begins with a multi-threaded **Google Colab** script that pulls existing CSV files from a connected Google Drive folder and uploads them in parallel to the Azure Blob landing zone, simulating a streaming ingestion source without paid API access. An **Apache Airflow** DAG then orchestrates the data through Polars (Bronze) and DuckDB (Silver/Gold), ultimately loading it into an **Apache Iceberg** lakehouse with **SCD Type 2** historical tracking. All metadata and file lineage are centrally audited in **Azure PostgreSQL**.
 
@@ -9,7 +9,7 @@ The pipeline begins with a multi-threaded **Google Colab** script that pulls exi
 | **Data Source** | Multi-threaded Google Colab script pulling CSVs from Google Drive to Azure Blob |
 | **Scale** | Fully cloud-native. Designed for TB scale processing via DuckDB + Iceberg. |
 | **Orchestration** | Apache Airflow (Dockerized, `@daily` schedule) |
-| **Compute Environment** | Azure Virtual Machine (Standard_D2s_v3, Ubuntu) hosting Airflow and processing scripts |
+| **Compute Environment** | Azure Virtual Machine (Standard_D2s_v3 — 2 vCPUs, 8GB RAM, Ubuntu) |
 | **Compute Engines** | Polars (Bronze streaming), DuckDB (Silver SQL transforms + Gold SCD2 merge) |
 | **Storage** | Azure Data Lake Storage Gen2 (ADLS) — Apache Parquet / Apache Iceberg |
 | **State Management** | Azure PostgreSQL Flexible Server — file lineage audit log + Iceberg SQL Catalog |
@@ -31,30 +31,26 @@ flowchart TB
         DAG["propintel_daily_etl.py<br/>Bronze → Silver → Gold"]
     end
 
-    subgraph cloud_storage ["☁️ Azure Data Lake Storage Gen2"]
-        direction TB
+    subgraph landing ["☁️ Azure Data Lake: Landing Zone"]
+        B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
+    end
 
-        subgraph landing ["Landing Zone"]
-            B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
-        end
+    subgraph bronze ["☁️ Azure Data Lake: Bronze Layer"]
+        B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
+        B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
+        B_IN --> B_ENGINE --> B_OUT
+    end
 
-        subgraph bronze ["Bronze Layer"]
-            B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
-            B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
-            B_IN --> B_ENGINE --> B_OUT
-        end
+    subgraph silver ["☁️ Azure Data Lake: Silver Layer"]
+        S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
+        S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
+        B_OUT --> S_ENGINE --> S_OUT
+    end
 
-        subgraph silver ["Silver Layer"]
-            S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
-            S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
-            B_OUT --> S_ENGINE --> S_OUT
-        end
-
-        subgraph gold ["Gold Layer"]
-            G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
-            G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
-            S_OUT --> G_ENGINE --> G_OUT
-        end
+    subgraph gold ["☁️ Azure Data Lake: Gold Layer"]
+        G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
+        G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
+        S_OUT --> G_ENGINE --> G_OUT
     end
 
     subgraph cloud_db ["☁️ Azure PostgreSQL Flexible Server"]
@@ -147,21 +143,21 @@ Seamless scheduling and parallel execution across 122 files.
 ![Airflow DAG](src/utils/Pics_for_readme/Pairflow_dag_EtL.png)
 ![Airflow Gantt Chart](src/utils/Pics_for_readme/Propi_airflow_gant_chart.png)
 
-### 5. Interactive Rollback System
+### 5. Gold Layer: Apache Iceberg & SCD Type 2
+Showcasing DuckDB perfectly tracking historical price changes over time in the Gold Iceberg tables.
+![SCD2 Dashboard](src/utils/Pics_for_readme/PropI_scd2_Iceberg.png)
+
+### 6. Interactive Rollback System
 Custom CLI tool for nuclear resets and data rollback. During development, three extra teardown DAGs were created specifically for targeted testing. These DAGs guaranteed the pipeline worked smoothly by allowing developers to instantly wipe a specific layer and trigger a clean rebuild.
 ![Rollback Tool](src/utils/Pics_for_readme/Pipeline_rollback.png)
 
-### 6. Bronze Reset DAG (Safe Teardown)
+### 7. Bronze Reset DAG (Safe Teardown)
 Airflow DAG for safely tearing down and rebuilding the Bronze layer without affecting Silver or Gold.
 ![Bronze Reset DAG](src/utils/Pics_for_readme/p.Bronze_reset.png)
 
-### 7. Azure Portal — Provisioned Cloud Resources
+### 8. Azure Portal — Provisioned Cloud Resources
 The actual Azure resource group showing the provisioned VM, Storage Account, PostgreSQL server, and networking.
 ![Azure Resources](src/utils/Pics_for_readme/PropI_cloud_resources.png)
-
-### 8. Gold Layer: Apache Iceberg & SCD Type 2
-Showcasing DuckDB perfectly tracking historical price changes over time in the Gold Iceberg tables.
-![SCD2 Dashboard](src/utils/Pics_for_readme/PropI_scd2_Iceberg.png)
 
 ---
 
@@ -225,7 +221,7 @@ PropI/
 | **PostgreSQL** | Azure Flexible Server | File lineage tracking + Iceberg SQL Catalog |
 | **Docker** | Compose v2 | Containerized Airflow deployment |
 | **Azure Blob Storage** | Gen2 | Cloud data lake for all Medallion layers |
-| **Azure Virtual Machine**| Standard_D2s_v3 | Compute host for Docker/Airflow and scripts |
+| **Azure Virtual Machine**| Standard_D2s_v3 (2 vCPUs, 8GB RAM) | Compute host for Docker/Airflow and scripts |
 | **Google Colab** | — | Multi-threaded CSV upload simulator |
 
 ---
