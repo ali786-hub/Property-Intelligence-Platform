@@ -31,25 +31,21 @@ flowchart TB
         DAG["propintel_daily_etl.py<br/>Bronze → Silver → Gold"]
     end
 
-    subgraph landing ["☁️ Azure Data Lake: Landing Zone"]
-        B_IN["Raw CSVs<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
-    end
+    subgraph cloud_storage ["☁️ Azure Data Lake Storage Gen2"]
+        direction TB
+        B_IN["Raw CSVs (Landing Zone)<br/><code>abfs://propidatalake/landingzone/*.csv</code>"]
+        
+        B_ENGINE["Polars (Bronze Ingestion)<br/><i>Streaming sink_parquet</i>"]
+        B_OUT["Parquet Files (Bronze Layer)<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
+        
+        S_ENGINE["DuckDB (Silver Transformation)<br/><i>SQL Transforms & Standardization</i>"]
+        S_OUT["Cleaned Parquet (Silver Layer)<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
+        
+        G_ENGINE["DuckDB + PyArrow (Gold Loading)<br/><i>SCD Type 2 Timeline Merge</i>"]
+        G_OUT["Apache Iceberg Warehouse (Gold Layer)<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
 
-    subgraph bronze ["☁️ Azure Data Lake: Bronze Layer"]
-        B_ENGINE["Polars<br/><i>Streaming sink_parquet</i>"]
-        B_OUT["Parquet Files<br/><code>abfs://propidatalake/bronze/*.parquet</code>"]
         B_IN --> B_ENGINE --> B_OUT
-    end
-
-    subgraph silver ["☁️ Azure Data Lake: Silver Layer"]
-        S_ENGINE["DuckDB<br/><i>Type casting, geo-fencing, Date parsing</i>"]
-        S_OUT["Cleaned Parquet<br/><code>abfs://propidatalake/silver/*_clean.parquet</code>"]
         B_OUT --> S_ENGINE --> S_OUT
-    end
-
-    subgraph gold ["☁️ Azure Data Lake: Gold Layer"]
-        G_ENGINE["DuckDB + PyArrow<br/><i>SCD Type 2 Incremental Merge</i>"]
-        G_OUT["Apache Iceberg Warehouse<br/><code>abfs://propidatalake/gold/warehouse/propintel/</code>"]
         S_OUT --> G_ENGINE --> G_OUT
     end
 
@@ -105,7 +101,7 @@ A multi-threaded Python script running in Google Colab that pulls existing CSV f
 
 **Limitations & Trade-offs:**
 - **Late Data Arrival:** The current SCD2 window logic assumes data is ingested in chronological order. Late-arriving historical records can cause timeline shifting requiring a full rebuild of the history for that specific property ID.
-- **Merge Into Limitation:** Because DuckDB combined with PyArrow/PyIceberg currently lacks a native `MERGE INTO` SQL capability for Iceberg tables, a bulk overwrite of the partition/table was required. We successfully maintained the complex SCD2 logic entirely in memory before executing the bulk overwrite to Iceberg.
+- **Merge Into Limitation:** Because DuckDB combined with PyArrow/PyIceberg currently lacks a native `MERGE INTO` SQL capability for Iceberg tables, a bulk overwrite of the partition/table was required. I successfully maintained the complex SCD2 logic entirely in memory before executing the bulk overwrite to Iceberg.
 
 ---
 
@@ -139,7 +135,7 @@ The central audit log in Azure PostgreSQL. By securely hashing every file on arr
 
 ### 4. Airflow Orchestration (DAG & Gantt)
 Seamless scheduling and parallel execution across 122 files. 
-*Note: In the Gantt chart below, the long red blocks honestly reflect that the Gold Layer failed 8 times during active development before it was successfully debugged and stabilized.*
+*Note: In the Gantt chart below, the long red blocks (failures) reflect that the Gold Layer failed 8 times during active development before it was successfully debugged and stabilized.*
 ![Airflow DAG](src/utils/Pics_for_readme/Pairflow_dag_EtL.png)
 ![Airflow Gantt Chart](src/utils/Pics_for_readme/Propi_airflow_gant_chart.png)
 
@@ -148,7 +144,7 @@ Showcasing DuckDB perfectly tracking historical price changes over time in the G
 ![SCD2 Dashboard](src/utils/Pics_for_readme/PropI_scd2_Iceberg.png)
 
 ### 6. Interactive Rollback System
-Custom CLI tool for nuclear resets and data rollback. During development, three extra teardown DAGs were created specifically for targeted testing. These DAGs guaranteed the pipeline worked smoothly by allowing developers to instantly wipe a specific layer and trigger a clean rebuild.
+Custom CLI tool for nuclear resets and data rollback. During development, three extra teardown DAGs were created specifically for targeted testing. These DAGs guaranteed the pipeline worked smoothly by allowing me to instantly wipe a specific layer and trigger a clean rebuild.
 ![Rollback Tool](src/utils/Pics_for_readme/Pipeline_rollback.png)
 
 ### 7. Bronze Reset DAG (Safe Teardown)
@@ -275,5 +271,6 @@ python src/utils/dev_hard_reset.py
 - [x] Database schema v2 (optimized for bulk upsert)
 - [x] Interactive layer rollback tool (`dev_hard_reset.py`)
 - [x] Gold layer validation and testing
-- [x] Cloud migration — Azure Blob Storage + Azure PostgreSQL
-- [ ] Scheduled automated re-ingestion (cron-based Colab trigger)
+- [x] Cloud migration
+      Azure Blob Storage + Azure PostgreSQL + Standard_D2s_v3(Virtual Machine)
+- [ ] re-ingestion (Colab trigger)
