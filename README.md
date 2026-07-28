@@ -9,7 +9,8 @@ The pipeline begins with a multi-threaded **Google Colab** script that pulls exi
 | **Data Source** | Multi-threaded Google Colab script pulling CSVs from Google Drive to Azure Blob |
 | **Scale** | Fully cloud-native. Designed for TB scale processing via DuckDB + Iceberg. |
 | **Orchestration** | Apache Airflow (Dockerized, `@daily` schedule) |
-| **Compute** | Polars (Bronze streaming), DuckDB (Silver SQL transforms + Gold SCD2 merge) |
+| **Compute Environment** | Azure Virtual Machine (Ubuntu) hosting Airflow and processing scripts |
+| **Compute Engines** | Polars (Bronze streaming), DuckDB (Silver SQL transforms + Gold SCD2 merge) |
 | **Storage** | Azure Data Lake Storage Gen2 (ADLS) — Apache Parquet / Apache Iceberg |
 | **State Management** | Azure PostgreSQL Flexible Server — file lineage audit log + Iceberg SQL Catalog |
 
@@ -62,22 +63,18 @@ flowchart TB
     end
 
     source --> B_IN
-    DAG -. "triggers" .-> bronze
-    DAG -. "triggers" .-> silver
-    DAG -. "triggers" .-> gold
+    
+    %% Airflow triggers mapping directly to the compute engines
+    DAG -. "triggers" .-> B_ENGINE
+    DAG -. "triggers" .-> S_ENGINE
+    DAG -. "triggers" .-> G_ENGINE
 
+    %% Logging interactions mapping perfectly to the DB
     B_ENGINE -. "logs status" .-> LINEAGE
     S_ENGINE -. "logs status" .-> LINEAGE
     G_ENGINE -. "logs status" .-> LINEAGE
     G_ENGINE <-. "reads/writes<br/>table metadata" .-> CATALOG
 ```
-
----
-
-## 🖥️ Interactive SCD2 Historical Dashboard
-A custom-built, interactive HTML and JavaScript dashboard that allows you to easily view and explore the Slowly Changing Dimension Type 2 (SCD2) history of the property database.
-
-By searching any property ID, users can instantly view its full historical price timeline, showcasing when and how the price changed, which listings are active or expired, and how the chronological chaining (`valid_from` to `valid_to`) is maintained. This dashboard acts as a direct validation tool for verifying the integrity of the Gold layer.
 
 ---
 
@@ -88,7 +85,7 @@ A multi-threaded Python script running in Google Colab that pulls existing CSV f
 
 ### 2. Bronze — Raw Ingestion to Parquet
 **Engine:** Polars
-- Airflow scans the Azure landing zone for new CSV files.
+- Airflow triggers the ingestion script, which then scans the Azure landing zone for new CSV files.
 - Computes a SHA-256 hash of each file (this hash becomes the **lineage key** that tracks the file across every layer).
 - Streams the CSV into a compressed Parquet file directly in Azure using Polars' `sink_parquet` (avoiding memory bottlenecks).
 - Logs the result to the Azure PostgreSQL `LineageTracker`.
@@ -110,6 +107,10 @@ A multi-threaded Python script running in Google Colab that pulls existing CSV f
 - DuckDB pulls the incoming data and the existing Iceberg data into memory and executes a highly optimized SQL **Window Function** to calculate the entire **SCD Type 2 Timeline** (tracking exact price changes across time with `is_current`, `valid_from`, and `valid_to` flags).
 - Overwrites the PyIceberg table atomically, creating a new time-travel snapshot.
 
+**Limitations & Trade-offs:**
+- **Late Data Arrival:** The current SCD2 window logic assumes data is ingested in chronological order. Late-arriving historical records can cause timeline shifting requiring a full rebuild of the history for that specific property ID.
+- **Merge Into Limitation:** Because DuckDB combined with PyArrow/PyIceberg currently lacks a native `MERGE INTO` SQL capability for Iceberg tables, a bulk overwrite of the partition/table was required. We successfully maintained the complex SCD2 logic entirely in memory before executing the bulk overwrite to Iceberg.
+
 ---
 
 ## 🔒 Idempotency & State Management
@@ -125,33 +126,42 @@ The `LineageTracker` uses a **RAM-buffered bulk-flush** pattern: it pre-loads al
 
 ---
 
-## 📸 Pipeline Showcase & Proof of Execution
+## 📸 System Operations Showcase
 
-### Azure Data Lake Architecture Tree
-Visual proof of the Medallion architecture deployed successfully across Azure Storage containers.
-![Azure Data Lake](src/utils/Pics_for_readme/PropiDataLakestructure.png)
-
-### Airflow Orchestration (DAG & Gantt)
-Proving seamless scheduling and parallel execution across 122 files.
-![Airflow DAG](src/utils/Pics_for_readme/Pairflow_dag_EtL.png)
-![Airflow Gantt Chart](src/utils/Pics_for_readme/Propi_airflow_gant_chart.png)
-
-### Postgres Lineage Tracker (Idempotency)
-Direct query output from Azure PostgreSQL proving that Airflow is Consistently tracking the success state of every single file.
-![Postgres Lineage](src/utils/Pics_for_readme/PLineage_tracker_airflow.png)
-
-### Gold Layer: Apache Iceberg & SCD Type 2
-Showcasing DuckDB perfectly tracking historical price changes over time in the Gold Iceberg tables.
-![SCD2 Dashboard](src/utils/Pics_for_readme/PropI_scd2_Iceberg.png)
-
-### Google Colab Multi-threaded Ingestion
+### 1. Google Colab Multi-threaded Ingestion
 Uploading existing CSV files from Google Drive directly to Azure Storage Gen2 in parallel, simulating a streaming data source.
 ![Colab API Upload](src/utils/Pics_for_readme/Pcollab_api.png)
 ![Colab to Azure Upload](src/utils/Pics_for_readme/P.streaming_from_google_drive_to_blob_VIa_collab.png)
 
-### Interactive Rollback System
-Custom CLI tool for nuclear resets and data rollback.
+### 2. Azure Data Lake Architecture Tree
+The Medallion architecture successfully populated across Azure Storage containers.
+![Azure Data Lake](src/utils/Pics_for_readme/PropiDataLakestructure.png)
+
+### 3. Postgres Lineage Tracker (Idempotency)
+The central audit log in Azure PostgreSQL. By securely hashing every file on arrival, the pipeline guarantees exactly-once processing (idempotency). If a file crashes midway, the tracker ensures we safely resume without duplicating rows.
+![Postgres Lineage](src/utils/Pics_for_readme/PLineage_tracker_airflow.png)
+
+### 4. Airflow Orchestration (DAG & Gantt)
+Seamless scheduling and parallel execution across 122 files. 
+*Note: In the Gantt chart below, the long red blocks honestly reflect that the Gold Layer failed 8 times during active development before it was successfully debugged and stabilized.*
+![Airflow DAG](src/utils/Pics_for_readme/Pairflow_dag_EtL.png)
+![Airflow Gantt Chart](src/utils/Pics_for_readme/Propi_airflow_gant_chart.png)
+
+### 5. Interactive Rollback System
+Custom CLI tool for nuclear resets and data rollback. During development, three extra teardown DAGs were created specifically for targeted testing. These DAGs guaranteed the pipeline worked smoothly by allowing developers to instantly wipe a specific layer and trigger a clean rebuild.
 ![Rollback Tool](src/utils/Pics_for_readme/Pipeline_rollback.png)
+
+### 6. Bronze Reset DAG (Safe Teardown)
+Airflow DAG for safely tearing down and rebuilding the Bronze layer without affecting Silver or Gold.
+![Bronze Reset DAG](src/utils/Pics_for_readme/p.Bronze_reset.png)
+
+### 7. Azure Portal — Provisioned Cloud Resources
+The actual Azure resource group showing the provisioned VM, Storage Account, PostgreSQL server, and networking.
+![Azure Resources](src/utils/Pics_for_readme/PropI_cloud_resources.png)
+
+### 8. Gold Layer: Apache Iceberg & SCD Type 2
+Showcasing DuckDB perfectly tracking historical price changes over time in the Gold Iceberg tables.
+![SCD2 Dashboard](src/utils/Pics_for_readme/PropI_scd2_Iceberg.png)
 
 ---
 
@@ -196,7 +206,8 @@ PropI/
 ├── Dockerfile                               # Custom Airflow image with pipeline deps
 ├── requirements.txt                         # Python dependencies
 ├── .env.example                             # Environment variable template
-└── problems_solved.md                       # Personal engineering decisions log
+├── problems_solved.md                       # Personal engineering decisions log
+└── fixables.md                              # Anomalies and future technical debt tracker
 ```
 
 ---
@@ -214,13 +225,14 @@ PropI/
 | **PostgreSQL** | Azure Flexible Server | File lineage tracking + Iceberg SQL Catalog |
 | **Docker** | Compose v2 | Containerized Airflow deployment |
 | **Azure Blob Storage** | Gen2 | Cloud data lake for all Medallion layers |
+| **Azure Virtual Machine**| Ubuntu | Compute host for Docker/Airflow and scripts |
 | **Google Colab** | — | Multi-threaded CSV upload simulator |
 
 ---
 
 ## 🚀 Getting Started
 
-**Prerequisites:** Python 3.11+, Docker & Docker Compose, an Azure PostgreSQL instance, an Azure Storage Account
+**Prerequisites:** Python 3.11+, Docker & Docker Compose, an Azure PostgreSQL instance, an Azure Storage Account, Azure Virtual Machine.
 
 ```bash
 # 1. Clone the repository
