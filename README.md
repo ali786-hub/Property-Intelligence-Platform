@@ -9,7 +9,7 @@ The pipeline begins with a multi-threaded **Google Colab** script that pulls exi
 | **Data Source** | Multi-threaded Google Colab script pulling CSVs from Google Drive to Azure Blob |
 | **Scale** | Fully cloud-native. Designed for TB scale processing via DuckDB + Iceberg. |
 | **Orchestration** | Apache Airflow (Dockerized, `@daily` schedule) |
-| **Compute Environment** | Azure Virtual Machine (Ubuntu) hosting Airflow and processing scripts |
+| **Compute Environment** | Azure Virtual Machine (Standard_D2s_v3, Ubuntu) hosting Airflow and processing scripts |
 | **Compute Engines** | Polars (Bronze streaming), DuckDB (Silver SQL transforms + Gold SCD2 merge) |
 | **Storage** | Azure Data Lake Storage Gen2 (ADLS) — Apache Parquet / Apache Iceberg |
 | **State Management** | Azure PostgreSQL Flexible Server — file lineage audit log + Iceberg SQL Catalog |
@@ -225,7 +225,7 @@ PropI/
 | **PostgreSQL** | Azure Flexible Server | File lineage tracking + Iceberg SQL Catalog |
 | **Docker** | Compose v2 | Containerized Airflow deployment |
 | **Azure Blob Storage** | Gen2 | Cloud data lake for all Medallion layers |
-| **Azure Virtual Machine**| Ubuntu | Compute host for Docker/Airflow and scripts |
+| **Azure Virtual Machine**| Standard_D2s_v3 | Compute host for Docker/Airflow and scripts |
 | **Google Colab** | — | Multi-threaded CSV upload simulator |
 
 ---
